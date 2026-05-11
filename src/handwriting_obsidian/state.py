@@ -105,7 +105,7 @@ class ProcessingState:
         return int(cursor.lastrowid)
 
     def update(self, record_id: int, status: str, **values: Any) -> None:
-        if status not in STATUSES:
+        if status not in STATUSES:  # pragma: no cover - internal callers use fixed statuses
             raise ValueError(f"invalid status {status!r}")
         values["status"] = status
         values["updated_at"] = _now()

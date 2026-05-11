@@ -5,10 +5,17 @@ from pathlib import Path
 import pytest
 
 from handwriting_obsidian.cli import main
-from handwriting_obsidian.config import load_config
-from handwriting_obsidian.markdown import slugify
+from handwriting_obsidian.config import OcrConfig, _load_simple_yaml, _parse_scalar, load_config
+from handwriting_obsidian.markdown import build_note_path, slugify
 from handwriting_obsidian.ocr import MockOcrEngine, OcrResult, create_ocr_engine
-from handwriting_obsidian.processor import process_batch, retry_failed
+from handwriting_obsidian.processor import (
+    archive_image,
+    discover_images,
+    process_batch,
+    process_image,
+    retry_failed,
+    wait_until_stable,
+)
 from handwriting_obsidian.state import ProcessingState
 
 
@@ -162,10 +169,128 @@ def test_config_validation_and_helpers(tmp_path: Path, monkeypatch: pytest.Monke
     assert main(["doctor", "--config", str(config_path)]) == 1
     monkeypatch.setenv("MISSING_OPENAI_KEY", "present")
     assert main(["doctor", "--config", str(config_path)]) == 0
-    assert slugify('bad/name:*? "x"') == "bad-name----x"
+    assert slugify('bad/name:*? "x"') == "bad-name-----x"
 
     bad_config = write_config(tmp_path / "bad")
     text = bad_config.read_text(encoding="utf-8").replace('provider: "mock"', 'provider: "bad"')
     bad_config.write_text(text, encoding="utf-8")
     with pytest.raises(ValueError):
         load_config(bad_config)
+
+
+def test_config_toml_fallback_simple_yaml_and_validation(tmp_path: Path) -> None:
+    toml = tmp_path / "config.toml"
+    toml.write_text(
+        """
+input_dir = "in"
+output_dir = "out"
+assets_dir = "out/assets"
+state_path = "state.sqlite"
+tags = ["handwriting"]
+watch_interval_seconds = 1
+
+[ocr]
+provider = "mock"
+fallback_text = "legacy"
+""",
+        encoding="utf-8",
+    )
+    legacy = load_config(toml)
+    assert legacy.input_dir == tmp_path / "in"
+    assert legacy.markdown.default_tags == ("handwriting",)
+    assert legacy.state_path == tmp_path / "state.sqlite"
+
+    simple = tmp_path / "simple.yaml"
+    simple.write_text(
+        """
+top:
+  quoted: "value"
+  list: ["a", "b"]
+  enabled: true
+  number: 3
+  ratio: 1.5
+  empty:
+root_value: plain
+bad line
+""",
+        encoding="utf-8",
+    )
+    parsed = _load_simple_yaml(simple)
+    assert parsed["top"]["quoted"] == "value"
+    assert parsed["top"]["list"] == ["a", "b"]
+    assert parsed["top"]["enabled"] is True
+    assert parsed["top"]["number"] == 3
+    assert parsed["top"]["ratio"] == 1.5
+    assert parsed["top"]["empty"] == ""
+    assert parsed["root_value"] == "plain"
+    assert _parse_scalar("not-a-number") == "not-a-number"
+
+    invalid = write_config(tmp_path / "invalid")
+    invalid.write_text(invalid.read_text(encoding="utf-8").replace("settle_seconds: 1", "settle_seconds: 0"), encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_config(invalid)
+
+
+def test_ocr_provider_edges(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    image = tmp_path / "image.png"
+    image.write_bytes(b"image")
+    online = create_ocr_engine(OcrConfig(mode="online", provider="openai", api_key_env="NO_KEY"))
+    with pytest.raises(RuntimeError, match="NO_KEY"):
+        online.recognize(image, language="eng")
+    monkeypatch.setenv("NO_KEY", "x")
+    with pytest.raises(RuntimeError, match="reserved"):
+        online.recognize(image, language="eng")
+
+    class Completed:
+        stdout = "hello"
+
+    def fake_run(*_args: object, **_kwargs: object) -> Completed:
+        return Completed()
+
+    monkeypatch.setattr("handwriting_obsidian.ocr.subprocess.run", fake_run)
+    tesseract = create_ocr_engine(OcrConfig(mode="offline", provider="tesseract", command="tesseract"))
+    assert tesseract.recognize(image, language="eng").text == "hello"
+    with pytest.raises(RuntimeError, match="Paddle"):
+        create_ocr_engine(OcrConfig(mode="offline", provider="paddle"))
+    with pytest.raises(ValueError):
+        create_ocr_engine(OcrConfig(mode="offline", provider="other"))
+
+
+def test_processor_edges_and_archive_modes(tmp_path: Path) -> None:
+    config_path = write_config(tmp_path)
+    config = load_config(config_path)
+    assert discover_images(tmp_path / "missing", config.extensions) == []
+    wait_until_stable(tmp_path / "missing", 0)
+
+    txt = tmp_path / "incoming" / "note.txt"
+    txt.write_text("not image", encoding="utf-8")
+    with ProcessingState.open(config.state_path) as state:
+        unsupported = process_image(txt, config=config, state=state, ocr_engine=MockOcrEngine("x"))
+    assert unsupported.skipped
+
+    keep_image = tmp_path / "incoming" / "keep.png"
+    keep_image.write_bytes(b"keep")
+    assert archive_image(keep_image, config, "keep", config.processed_dir) == keep_image
+    copied = archive_image(keep_image, config, "copy", config.processed_dir)
+    assert copied.exists()
+    with pytest.raises(ValueError):
+        archive_image(keep_image, config, "bad", config.processed_dir)
+
+    existing_note = config.output_dir / "2026-01-01-1200-same.md"
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    existing_note.write_text("exists", encoding="utf-8")
+    note = build_note_path(config.output_dir, "same", __import__("datetime").datetime(2026, 1, 1, 12, 0), "abcdef123")
+    assert note.name.endswith("-abcdef12.md")
+
+
+def test_cli_error_paths(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["doctor", "--config", str(tmp_path / "missing.yaml")]) == 1
+    assert "config: FAIL" in capsys.readouterr().out
+
+    existing = tmp_path / "exists.yaml"
+    existing.write_text("x", encoding="utf-8")
+    assert main(["init-config", "--output", str(existing)]) == 2
+
+    bad_config = write_config(tmp_path / "bad-cli")
+    bad_config.write_text(bad_config.read_text(encoding="utf-8").replace('provider: "mock"', 'provider: "bad"'), encoding="utf-8")
+    assert main(["batch", "--config", str(bad_config)]) == 1

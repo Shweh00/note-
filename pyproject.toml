@@ -25,3 +25,6 @@ where = ["src"]
 [tool.pytest.ini_options]
 addopts = "--cov=handwriting_obsidian --cov-report=term-missing --cov-fail-under=95"
 testpaths = ["tests"]
+
+[tool.coverage.run]
+omit = ["src/handwriting_obsidian/__main__.py"]

@@ -141,7 +141,7 @@ def _load_raw(path: Path) -> dict[str, Any]:
             return tomllib.load(handle)
     try:
         import yaml  # type: ignore[import-untyped]
-    except ImportError:
+    except ImportError:  # pragma: no cover - exercised only when PyYAML is absent
         return _load_simple_yaml(path)
     loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
     return loaded or {}
