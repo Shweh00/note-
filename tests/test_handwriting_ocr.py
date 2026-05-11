@@ -1538,6 +1538,25 @@ ocr:
     assert Path(updated_config["watch"]["input_dir"]) == image_dir
 
 
+def test_init_sample_vault_force_changed_date_removes_stale_expected_files(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    vault = tmp_path / "force-date-vault"
+
+    assert main(["init-sample-vault", "--vault", str(vault), "--date", "2026-05-11"]) == 0
+    capsys.readouterr()
+    assert main(["init-sample-vault", "--vault", str(vault), "--date", "2026-06-02", "--force"]) == 0
+    capsys.readouterr()
+
+    expected_dir = vault / ".handwriting-ocr" / "real-samples" / "expected"
+    expected_names = sorted(path.name for path in expected_dir.glob("*.expected.md"))
+    assert len(expected_names) == 18
+    assert all(name.startswith("2026-06-02_") for name in expected_names)
+
+    assert main(["validate-samples", "--vault", str(vault)]) == 1
+    assert "EXTRA_EXPECTED_NOT_IN_MANIFEST" not in capsys.readouterr().out
+
+
 def test_init_sample_vault_skips_existing_correct_config(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1571,6 +1590,18 @@ def test_init_sample_vault_allows_config_without_watch_input(
 
     assert main(["init-sample-vault", "--vault", str(vault)]) == 0
     assert "sample vault scaffold: READY" in capsys.readouterr().out
+
+    import yaml
+
+    updated_config = yaml.safe_load(config.read_text(encoding="utf-8"))
+    image_dir = vault / "Inbox" / "HandwritingImages" / "real-samples"
+    assert updated_config["ocr"]["provider"] == "mock"
+    assert Path(updated_config["watch"]["input_dir"]) == image_dir
+    assert Path(updated_config["watch"]["processed_dir"]) == image_dir / "_processed"
+    assert Path(updated_config["watch"]["error_dir"]) == image_dir / "_errors"
+
+    assert main(["validate-samples", "--vault", str(vault)]) == 1
+    assert "CONFIG_WATCH_INPUT_DIR_MISSING" not in capsys.readouterr().out
 
 
 def test_init_sample_vault_reports_missing_and_invalid_templates(

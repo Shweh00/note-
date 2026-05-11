@@ -91,6 +91,8 @@ def init_sample_vault(
         _write_or_skip_config(config_path, root, force, created, skipped)
         _write_yaml_file(manifest_path, manifest_data)
         created.append(str(manifest_path))
+        if force:
+            _remove_stale_expected_files(expected_dir, set(expected_paths))
         for sample in manifest_data["samples"]:
             path = expected_dir / Path(sample["expected_file"]).name
             path.write_text(_expected_file_text(expected_text, sample), encoding="utf-8")
@@ -149,6 +151,9 @@ def format_result_text(result: InitSampleVaultResult) -> str:
             "  2. Fill expected/*.expected.md with human transcriptions.",
             "  3. Replace image_sha256 TODO values:",
             f'     cd "{result.image_dir}" && sha256sum <image-file>',
+            "     macOS: shasum -a 256 <image-file>",
+            "     Windows PowerShell: Get-FileHash -Algorithm SHA256 <image-file>",
+            "     Paste the lowercase 64-character hex hash into sample-manifest.yaml.",
             "  4. Set privacy_checked: true only after redaction, background check, EXIF/GPS removal, and expected text review.",
             f'  5. Run: handwriting-ocr validate-samples --vault "{result.vault}"',
             "  6. After PASS:",
@@ -300,7 +305,9 @@ def _read_watch_input_dir(config_path: Path) -> Path | None:
 
 def _write_or_skip_config(config_path: Path, root: Path, force: bool, created: list[str], skipped: list[str]) -> None:
     if config_path.exists():
-        if not force:
+        configured = _read_watch_input_dir(config_path)
+        expected = (root / IMAGE_DIR_REL).resolve()
+        if not force and configured == expected:
             skipped.append(str(config_path))
             return
         data = _load_yaml_file(config_path)
@@ -308,13 +315,24 @@ def _write_or_skip_config(config_path: Path, root: Path, force: bool, created: l
         import yaml  # type: ignore[import-untyped]
 
         data = yaml.safe_load(_starter_config_text(root)) or {}
-    watch = data.setdefault("watch", {})
+    watch = data.get("watch")
+    if not isinstance(watch, dict):
+        watch = {}
+        data["watch"] = watch
     watch["input_dir"] = str(root / IMAGE_DIR_REL)
     watch["output_dir"] = str(root / NOTES_DIR_REL)
     watch["processed_dir"] = str(root / IMAGE_DIR_REL / PROCESSED_DIR_NAME)
     watch["error_dir"] = str(root / IMAGE_DIR_REL / ERROR_DIR_NAME)
     _write_yaml_file(config_path, data)
     created.append(str(config_path))
+
+
+def _remove_stale_expected_files(expected_dir: Path, current_expected_paths: set[Path]) -> None:
+    if not expected_dir.is_dir():
+        return
+    for path in expected_dir.glob("*.expected.md"):
+        if path not in current_expected_paths:
+            path.unlink()
 
 
 def _write_yaml_file(path: Path, data: dict[str, Any]) -> None:

@@ -133,7 +133,7 @@ YYYY-MM-DD_NNN_<lang>_<scenario>_<quality>.<ext>
 - `dataset.id`：建议 `real-handwriting-min18-YYYYMMDD`。
 - `dataset.owner`：样例维护者或代理名，不写个人真实姓名。
 - `dataset.privacy_level`：固定使用 `redacted-local-only`，表示已脱敏且只在本机使用。
-- `samples[].image_sha256`：用 `sha256sum` 或 `shasum -a 256` 生成。
+- `samples[].image_sha256`：Linux 用 `sha256sum`，macOS 用 `shasum -a 256`，Windows PowerShell 用 `Get-FileHash -Algorithm SHA256` 生成；填入 manifest 时统一使用 lowercase 64 位 hex。
 - `samples[].expected_file`：相对 manifest 所在目录的路径，例如 `expected/<sample_id>.expected.md`。
 - `samples[].review_priority`：`p0` 表示阻塞质量判断，`p1` 表示重要覆盖，`p2` 表示补充覆盖。
 - `samples[].privacy_checked`：完成内容重写、背景检查、EXIF/GPS 清除和 expected 文本脱敏后必须改为 `true`。api-tester 复验时发现任何样例缺失该字段或值仍为 `false`，应判为采集包不完整。
@@ -143,6 +143,11 @@ YYYY-MM-DD_NNN_<lang>_<scenario>_<quality>.<ext>
 ```bash
 cd "$HW_SAMPLE_VAULT/Inbox/HandwritingImages/real-samples"
 sha256sum 2026-05-11_001_zh_meeting_clear.jpg
+```
+
+```powershell
+Set-Location "$env:HW_SAMPLE_VAULT\Inbox\HandwritingImages\real-samples"
+(Get-FileHash -Algorithm SHA256 .\2026-05-11_001_zh_meeting_clear.jpg).Hash.ToLower()
 ```
 
 ## api-tester 复验命令
