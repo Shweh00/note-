@@ -160,7 +160,7 @@ handwriting-ocr batch --config "$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml"
 handwriting-ocr status --config "$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml"
 ```
 
-`validate-samples` 成功时退出码为 `0` 并输出 `sample validation: PASS`；发现准入问题时退出码为 `1` 并逐条输出 `FAIL <CODE>:`，适合 api-tester 在真实 OCR 前先拒收不完整样例集。模板态 manifest、`privacy_checked: false`、`image_sha256: TODO`、expected 缺失或不足、图片数量不足、`watch.input_dir` 指错都会返回非 `0`。
+`validate-samples` 成功时退出码为 `0` 并输出 `sample validation: PASS`；发现准入问题时退出码为 `1` 并逐条输出 `FAIL <CODE>:`，适合 api-tester 在真实 OCR 前先拒收不完整样例集。模板态 manifest、`privacy_checked: false`、`image_sha256: TODO`、expected 缺失或不足、图片数量不足、额外图片、额外 expected 文件、`watch.input_dir` 指错都会返回非 `0`。
 
 如果需要手工排查目录数量，也可以运行：
 

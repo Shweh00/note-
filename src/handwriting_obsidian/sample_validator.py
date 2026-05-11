@@ -12,6 +12,11 @@ IMAGE_FILE_RE = re.compile(
     r"(?P<scenario>[a-z0-9-]+)_(?P<quality>[a-z0-9-]+))\.(?P<ext>jpg|jpeg|png)$",
     re.IGNORECASE,
 )
+SAMPLE_ID_RE = re.compile(
+    r"^(?P<date>\d{4}-\d{2}-\d{2})_(?P<number>[0-9]{3})_(?P<lang>zh|en|mixed|num)_"
+    r"(?P<scenario>[a-z0-9-]+)_(?P<quality>[a-z0-9-]+)$",
+    re.IGNORECASE,
+)
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 EXPECTED_FRONTMATTER_RE = re.compile(r"^---\n(?P<frontmatter>.*?)\n---\n?(?P<body>.*)$", re.DOTALL)
 SECTION_RE = re.compile(r"^## (?P<name>[A-Za-z0-9_-]+)\s*$", re.MULTILINE)
@@ -67,6 +72,7 @@ class SampleValidationResult:
     issues: list[SampleIssue] = field(default_factory=list)
     min_count: int = 18
     no_hash: bool = False
+    sample_ids: frozenset[str] = frozenset()
 
     @property
     def failures(self) -> list[SampleIssue]:
@@ -83,12 +89,7 @@ class SampleValidationResult:
     @property
     def valid_samples(self) -> int:
         failed_sample_ids = {issue.sample_id for issue in self.failures if issue.sample_id}
-        sample_ids = {
-            issue.sample_id
-            for issue in self.issues
-            if issue.sample_id and issue.code not in {"COVERAGE_REQUIRED_SAMPLE_MISSING"}
-        }
-        return max(0, len(sample_ids - failed_sample_ids))
+        return max(0, len(self.sample_ids - failed_sample_ids))
 
 
 def validate_sample_vault(
@@ -163,6 +164,7 @@ def validate_sample_vault(
 
     seen_ids: set[str] = set()
     seen_numbers: set[str] = set()
+    manifest_sample_ids: set[str] = set()
     manifest_image_names: set[str] = set()
     manifest_expected_paths: set[Path] = set()
     coverage: set[str] = set()
@@ -178,6 +180,7 @@ def validate_sample_vault(
             manifest.parent,
             seen_ids,
             seen_numbers,
+            manifest_sample_ids,
             manifest_image_names,
             manifest_expected_paths,
             coverage,
@@ -190,9 +193,21 @@ def validate_sample_vault(
 
     extra_images = sorted(path.name for path in image_files if path.name not in manifest_image_names)
     for image_name in extra_images:
-        _warn(issues, "EXTRA_IMAGE_NOT_IN_MANIFEST", f"image={image_name} is not listed in manifest")
+        _fail(issues, "EXTRA_IMAGE_NOT_IN_MANIFEST", f"image={image_name} is not listed in manifest")
 
-    return SampleValidationResult(manifest, final_image_dir, final_expected_dir, issues, required_count, no_hash)
+    extra_expected_files = sorted(path for path in expected_files if path not in manifest_expected_paths)
+    for expected_path in extra_expected_files:
+        _fail(issues, "EXTRA_EXPECTED_NOT_IN_MANIFEST", f"expected={expected_path.name} is not listed in manifest")
+
+    return SampleValidationResult(
+        manifest,
+        final_image_dir,
+        final_expected_dir,
+        issues,
+        required_count,
+        no_hash,
+        frozenset(manifest_sample_ids),
+    )
 
 
 def _validate_dataset(dataset: dict[str, Any], issues: list[SampleIssue]) -> None:
@@ -232,6 +247,7 @@ def _validate_sample(
     manifest_dir: Path,
     seen_ids: set[str],
     seen_numbers: set[str],
+    manifest_sample_ids: set[str],
     manifest_image_names: set[str],
     manifest_expected_paths: set[Path],
     coverage: set[str],
@@ -243,11 +259,17 @@ def _validate_sample(
     image_file = str(sample.get("image_file", ""))
     expected_file = str(sample.get("expected_file", ""))
     context = f"samples[{index}]"
+    sample_id_match = SAMPLE_ID_RE.fullmatch(sample_id)
     if not sample_id:
         _fail(issues, "SAMPLE_MANIFEST_SCHEMA_INVALID", f"{context}.sample_id is required")
+    elif not sample_id_match:
+        _fail(issues, "SAMPLE_ID_INVALID", f"sample_id={sample_id} must match YYYY-MM-DD_NNN_<lang>_<scenario>_<quality>", sample_id)
     elif sample_id in seen_ids:
         _fail(issues, "SAMPLE_DUPLICATE_ID", f"sample_id is duplicated: {sample_id}", sample_id)
-    seen_ids.add(sample_id)
+    if sample_id:
+        seen_ids.add(sample_id)
+    if sample_id_match:
+        manifest_sample_ids.add(sample_id)
 
     match = IMAGE_FILE_RE.fullmatch(image_file)
     if not match:
@@ -259,7 +281,8 @@ def _validate_sample(
         if number in seen_numbers:
             _fail(issues, "SAMPLE_DUPLICATE_ID", f"sample number is duplicated: {number}", sample_id)
         seen_numbers.add(number)
-        coverage.add(sample_id.split("_", 1)[1])
+        if sample_id_match and match.group("sample_id") == sample_id:
+            coverage.add(sample_id.split("_", 1)[1])
         _validate_language(sample_id, match.group("lang").lower(), str(sample.get("language", "")), issues)
     manifest_image_names.add(image_file)
 

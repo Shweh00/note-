@@ -1363,6 +1363,11 @@ def test_validate_samples_cli_accepts_complete_real_sample_vault(
     assert main(["validate-samples", "--config", str(config_path), "--manifest", str(manifest_path)]) == 0
     output = capsys.readouterr().out
     assert "sample validation: PASS" in output
+    assert "samples: 18 valid, 0 failed, 0 warnings" in output
+
+    assert main(["validate-samples", "--vault", str(vault), "--format", "json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["summary"]["valid_samples"] == 18
 
 
 def test_validate_samples_cli_rejects_admission_failures(
@@ -1401,7 +1406,33 @@ def test_validate_samples_cli_rejects_admission_failures(
     assert "FAIL SAMPLE_HASH_MISMATCH:" in output
     assert "FAIL SAMPLE_FILENAME_INVALID:" in output
     assert "expected frontmatter privacy_checked must be true" in output
-    assert "WARN EXTRA_IMAGE_NOT_IN_MANIFEST:" in output
+    assert "FAIL EXTRA_IMAGE_NOT_IN_MANIFEST:" in output
+    assert "FAIL EXTRA_EXPECTED_NOT_IN_MANIFEST:" in output
+
+
+def test_validate_samples_cli_rejects_invalid_sample_id_without_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _config_path, manifest_path = write_sample_vault(tmp_path)
+    vault = tmp_path / "sample-vault"
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="utf-8").replace(
+            'sample_id: "2026-05-11_001_zh_meeting_clear"',
+            'sample_id: "bad-sample-id"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["validate-samples", "--vault", str(vault), "--manifest", str(manifest_path)]) == 1
+    captured = capsys.readouterr()
+    stdout = captured.out
+    stderr = captured.err
+
+    assert "sample validation: FAIL" in stdout
+    assert "FAIL SAMPLE_ID_INVALID:" in stdout
+    assert "Traceback" not in stdout
+    assert "Traceback" not in stderr
 
 
 def test_validate_samples_cli_rejects_template_manifest_and_empty_real_samples(
