@@ -113,7 +113,7 @@ handwriting-ocr batch --config ~/ObsidianVault/.handwriting-ocr/config.yaml
 ## 常见问题
 
 - 目录不可写：运行 `handwriting-ocr doctor --config ...`，它会检查输出、归档、错误目录。
-- 重复图片没有生成新笔记：工具按内容 SHA-256 去重，已成功处理的相同内容会记录为 `duplicate`，默认移动到 `processed/`，避免 `batch` 或 `watch` 反复计数。需要保留在输入目录时可把 `dedupe.on_duplicate` 改为 `keep`。
+- 重复图片没有生成新笔记：工具按内容 SHA-256 去重，已成功处理的相同内容会记录为 `duplicate`，默认移动到 `processed/`，避免 `batch` 或 `watch` 反复计数。需要保留在输入目录时可把 `dedupe.on_duplicate` 改为 `keep`；此模式只会为同一 `source_path + source_hash` 写入第一条 duplicate 记录，后续轮询不会继续增加 duplicate 计数。
 - OCR 失败：查看 `status` 最近失败，然后修复配置或凭据，运行 `retry-failed`。
 - Obsidian 看不到图片：确认输出目录和 processed 目录都在同一个 vault 中，Markdown 使用相对 Obsidian embed 链接。
 

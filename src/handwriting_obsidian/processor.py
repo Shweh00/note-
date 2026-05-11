@@ -103,6 +103,16 @@ def process_image(
         image_hash = fingerprint(image_path)
         existing = state.successful_by_hash(image_hash)
         if existing:
+            if (
+                config.dedupe.on_duplicate == "keep"
+                and state.duplicate_by_path_hash(source_path=image_path, source_hash=image_hash)
+            ):
+                return ProcessResult(
+                    image_path=image_path,
+                    note_path=Path(existing.output_path) if existing.output_path else None,
+                    status="duplicate",
+                    reason="duplicate already recorded",
+                )
             archived_path = _archive_duplicate(image_path, config)
             state.duplicate(
                 source_path=image_path,

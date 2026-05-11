@@ -23,7 +23,9 @@ watch_interval_seconds = 5
 
 [dedupe]
 strategy = "content_hash"
-# skip records a duplicate and archives it; keep leaves the duplicate in input_dir.
+# skip records a duplicate and archives it.
+# keep records the first duplicate for each source_path + source_hash and leaves
+# the file in input_dir; later batch/watch scans do not add more duplicate rows.
 on_duplicate = "skip"
 
 [ocr]

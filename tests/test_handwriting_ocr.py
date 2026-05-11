@@ -130,6 +130,34 @@ def test_duplicate_content_in_new_file_is_recorded_without_new_note(tmp_path: Pa
     assert counts["duplicate"] == 1
 
 
+def test_keep_duplicate_is_not_recorded_again_on_repeated_batch(tmp_path: Path) -> None:
+    config_path = write_config(tmp_path)
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace('on_duplicate: "skip"', 'on_duplicate: "keep"'),
+        encoding="utf-8",
+    )
+    config = load_config(config_path)
+    first = tmp_path / "incoming" / "first.jpg"
+    first.write_bytes(b"same bytes")
+    process_batch(config, create_ocr_engine(config.ocr))
+
+    duplicate = tmp_path / "incoming" / "duplicate.jpg"
+    duplicate.write_bytes(b"same bytes")
+    first_duplicate = process_batch(config, create_ocr_engine(config.ocr))
+    second_duplicate = process_batch(config, create_ocr_engine(config.ocr))
+
+    assert [result.status for result in first_duplicate] == ["duplicate"]
+    assert [result.status for result in second_duplicate] == ["duplicate"]
+    assert second_duplicate[0].reason == "duplicate already recorded"
+    assert duplicate.exists()
+    assert not (config.processed_dir / "duplicate.jpg").exists()
+    assert len(list(config.output_dir.glob("*.md"))) == 1
+    with ProcessingState.open(config.state_path) as state:
+        counts = state.counts()
+    assert counts["success"] == 1
+    assert counts["duplicate"] == 1
+
+
 def test_retry_failed_processes_error_archived_file(tmp_path: Path) -> None:
     config_path = write_config(tmp_path)
     config = load_config(config_path)

@@ -91,6 +91,17 @@ class ProcessingState:
         ).fetchone()
         return _record(row) if row else None
 
+    def duplicate_by_path_hash(self, *, source_path: Path, source_hash: str) -> StateRecord | None:
+        row = self.connection.execute(
+            """
+            SELECT * FROM processed_files
+            WHERE source_path = ? AND source_hash = ? AND status = 'duplicate'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (str(source_path), source_hash),
+        ).fetchone()
+        return _record(row) if row else None
+
     def insert_pending(self, *, source_path: Path, source_hash: str, file_size: int, mtime: float) -> int:
         now = _now()
         cursor = self.connection.execute(
