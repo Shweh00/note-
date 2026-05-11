@@ -10,7 +10,7 @@ import pytest
 from handwriting_obsidian.cli import main
 from handwriting_obsidian.config import OcrConfig, _load_simple_yaml, _parse_scalar, load_config
 from handwriting_obsidian.index import update_index
-from handwriting_obsidian.markdown import build_note_path, render_date_folder, resolve_note_output_dir, slugify
+from handwriting_obsidian.markdown import build_note_path, render_date_folder, resolve_note_date, resolve_note_output_dir, slugify
 from handwriting_obsidian.ocr import MockOcrEngine, OcrResult, create_ocr_engine
 from handwriting_obsidian.processor import (
     archive_image,
@@ -135,11 +135,104 @@ def test_date_folder_outputs_final_path_and_relative_image(tmp_path: Path) -> No
     note = results[0].note_path
     assert note is not None
     assert note.parent == config.output_dir / "2026" / "05" / "11"
+    assert note.name == "2026-05-11-2026-05-11-meeting.md"
     assert "日期目录内容" in note.read_text(encoding="utf-8")
     assert "![[../../../../../../incoming/processed/2026-05-11 meeting.png]]" in note.read_text(encoding="utf-8")
     with ProcessingState.open(config.state_path) as state:
         records = state.successful_records()
     assert records[0].output_path == str(note)
+    assert records[0].note_date == "2026-05-11"
+
+
+def test_note_date_drives_filename_template_custom_template_and_index_group(tmp_path: Path) -> None:
+    template = tmp_path / "note-template.md"
+    template.write_text("created={{created_at}}\ndate={{date}}\n{{recognized_markdown}}\n", encoding="utf-8")
+    config_path = write_config(tmp_path)
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            '  default_tags: ["handwriting", "ocr", "to-review"]',
+            '  default_tags: ["handwriting", "ocr", "to-review"]\n'
+            "  date_folder:\n"
+            "    enabled: true\n"
+            '    pattern: "YYYY/MM/DD"\n'
+            '    date_source: "source_name"\n'
+            "  template:\n"
+            '    mode: "file"\n'
+            f'    file_path: "{template}"\n'
+            '    missing_behavior: "fallback"',
+        )
+        + """
+index:
+  enabled: true
+  path: "Index.md"
+  title: "手写识别索引"
+  grouping: "date"
+  sort: "desc"
+  include_status: true
+  include_source_link: false
+  update_mode: "managed_block"
+""",
+        encoding="utf-8",
+    )
+    config = load_config(config_path)
+    image = tmp_path / "incoming" / "2024_12_31 year-end.png"
+    image.write_bytes(b"semantic date")
+    image.with_suffix(".txt").write_text("语义日期正文", encoding="utf-8")
+
+    result = process_batch(config, MockOcrEngine("fallback"))[0]
+
+    assert result.status == "success"
+    assert result.note_path == config.output_dir / "2024" / "12" / "31" / "2024-12-31-2024_12_31-year-end.md"
+    note_text = result.note_path.read_text(encoding="utf-8")
+    assert "date=2024-12-31" in note_text
+    assert "created=2024-12-31" not in note_text
+    index_text = (config.output_dir / "Index.md").read_text(encoding="utf-8")
+    assert "## 2024-12-31" in index_text
+    assert "## 2026-" not in index_text
+
+
+def test_source_name_date_warning_falls_back_to_processed_at(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    config_path = write_config(tmp_path)
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            '  default_tags: ["handwriting", "ocr", "to-review"]',
+            '  default_tags: ["handwriting", "ocr", "to-review"]\n'
+            "  date_folder:\n"
+            "    enabled: true\n"
+            '    pattern: "YYYY/MM/DD"\n'
+            '    date_source: "source_name"',
+        ),
+        encoding="utf-8",
+    )
+    config = load_config(config_path)
+    image = tmp_path / "incoming" / "2026-99-99 invalid.png"
+    image.write_bytes(b"invalid date")
+
+    result = process_batch(config, MockOcrEngine("fallback"))[0]
+
+    assert result.status == "success"
+    assert "date warning: source_name has invalid date" in capsys.readouterr().out
+    assert "using processed_at" in result.reason
+
+
+def test_source_mtime_date_warning_falls_back_to_processed_at(tmp_path: Path) -> None:
+    config_path = write_config(tmp_path)
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            '  default_tags: ["handwriting", "ocr", "to-review"]',
+            '  default_tags: ["handwriting", "ocr", "to-review"]\n'
+            "  date_folder:\n"
+            "    enabled: true\n"
+            '    date_source: "source_mtime"',
+        ),
+        encoding="utf-8",
+    )
+    processed_at = datetime(2026, 5, 11, tzinfo=timezone.utc)
+    resolution = resolve_note_date(load_config(config_path), tmp_path / "incoming" / "missing.png", processed_at)
+
+    assert resolution.value == processed_at
+    assert resolution.warnings
+    assert "source_mtime could not be read" in resolution.warnings[0]
 
 
 def test_date_folder_creation_failure_marks_failed_and_error_archives(tmp_path: Path) -> None:

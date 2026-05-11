@@ -26,6 +26,9 @@ markdown:
   date_folder:
     enabled: false
     pattern: "YYYY/MM/DD"
+    # date_source resolves note_date. note_date drives the date folder,
+    # filename_template {{date}}, template {{date}}, and index grouping=date.
+    # created_at remains the processing timestamp.
     date_source: "processed_at"
   template:
     mode: "default"

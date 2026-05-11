@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 import re
+from dataclasses import dataclass
 
 from .config import AppConfig
 from .ocr import OcrResult
@@ -15,6 +16,12 @@ SOURCE_NAME_DATE_PATTERNS = (
     re.compile(r"(?P<year>\d{4})_(?P<month>\d{2})_(?P<day>\d{2})"),
     re.compile(r"(?P<year>\d{4})(?P<month>\d{2})(?P<day>\d{2})"),
 )
+
+
+@dataclass(frozen=True)
+class NoteDateResolution:
+    value: datetime
+    warnings: tuple[str, ...] = ()
 
 
 def slugify(value: str) -> str:
@@ -33,8 +40,10 @@ def build_note_path(
     created_at: datetime,
     source_hash: str,
     filename_template: str = "{{datetime}}-{{source_basename}}.md",
+    note_date: datetime | None = None,
 ) -> Path:
-    iso_date = created_at.strftime("%Y-%m-%d")
+    semantic_date = note_date or created_at
+    iso_date = semantic_date.strftime("%Y-%m-%d")
     values = {
         "date": iso_date,
         "datetime": created_at.strftime("%Y-%m-%d-%H%M"),
@@ -58,20 +67,37 @@ def render_date_folder(pattern: str, dt: datetime) -> Path:
     return Path(rendered)
 
 
-def note_date(config: AppConfig, image_path: Path, processed_at: datetime) -> datetime:
+def resolve_note_date(config: AppConfig, image_path: Path, processed_at: datetime) -> NoteDateResolution:
     source = config.markdown.date_folder.date_source
     if source == "source_mtime":
-        return datetime.fromtimestamp(image_path.stat().st_mtime, tz=timezone.utc)
+        try:
+            return NoteDateResolution(datetime.fromtimestamp(image_path.stat().st_mtime, tz=timezone.utc))
+        except OSError as exc:
+            return NoteDateResolution(
+                processed_at,
+                (f"date warning: source_mtime could not be read for {image_path.name}: {exc}; using processed_at",),
+            )
     if source == "source_name":
         for pattern in SOURCE_NAME_DATE_PATTERNS:
             match = pattern.search(image_path.name)
             if match:
                 parts = {key: int(value) for key, value in match.groupdict().items()}
                 try:
-                    return datetime(parts["year"], parts["month"], parts["day"], tzinfo=timezone.utc)
+                    return NoteDateResolution(datetime(parts["year"], parts["month"], parts["day"], tzinfo=timezone.utc))
                 except ValueError:
-                    return processed_at
-    return processed_at
+                    return NoteDateResolution(
+                        processed_at,
+                        (f"date warning: source_name has invalid date in {image_path.name}; using processed_at",),
+                    )
+        return NoteDateResolution(
+            processed_at,
+            (f"date warning: source_name could not find YYYY-MM-DD, YYYY_MM_DD, or YYYYMMDD in {image_path.name}; using processed_at",),
+        )
+    return NoteDateResolution(processed_at)
+
+
+def note_date(config: AppConfig, image_path: Path, processed_at: datetime) -> datetime:
+    return resolve_note_date(config, image_path, processed_at).value
 
 
 def resolve_note_output_dir(config: AppConfig, image_path: Path, processed_at: datetime) -> Path:
@@ -122,12 +148,14 @@ def build_template_context(
     config: AppConfig,
     title: str,
     created_at: datetime,
+    note_date: datetime | None = None,
     source_basename: str,
     source_image_relative: str,
     image_hash: str,
     ocr_result: OcrResult,
 ) -> dict[str, str]:
     iso_created = created_at.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    semantic_date = note_date or created_at
     text = ocr_result.text.strip() or "_未识别到文字。_"
     raw_text = ocr_result.raw_text.strip() or "(empty)"
     uncertain = "\n".join(f"- {item}" for item in ocr_result.uncertain_items) or "- 无"
@@ -139,7 +167,7 @@ def build_template_context(
     return {
         "title": f"手写识别 - {title}",
         "created_at": iso_created,
-        "date": created_at.strftime("%Y-%m-%d"),
+        "date": semantic_date.strftime("%Y-%m-%d"),
         "source_basename": source_basename,
         "source_image": source_image_relative,
         "source_hash": f"sha256:{image_hash}",
@@ -161,6 +189,7 @@ def render_note(
     config: AppConfig,
     title: str,
     created_at: datetime,
+    note_date: datetime | None = None,
     source_basename: str,
     source_image_relative: str,
     image_hash: str,
@@ -170,6 +199,7 @@ def render_note(
         config=config,
         title=title,
         created_at=created_at,
+        note_date=note_date,
         source_basename=source_basename,
         source_image_relative=source_image_relative,
         image_hash=image_hash,

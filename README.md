@@ -98,7 +98,9 @@ markdown:
     date_source: "processed_at"  # processed_at | source_mtime | source_name
 ```
 
-`pattern` 支持 `YYYY`、`MM`、`DD` 和 `/`、`-`、`_`。`source_name` 会从文件名里的 `YYYY-MM-DD`、`YYYY_MM_DD` 或 `YYYYMMDD` 解析日期，解析失败时回退到处理时间。
+`pattern` 支持 `YYYY`、`MM`、`DD` 和 `/`、`-`、`_`。`date_source` 解析出的日期称为 `note_date`：它会同时用于日期目录、`filename_template` 里的 `{{date}}`、模板变量 `{{date}}`，以及 `index.grouping: "date"` 的分组。`created_at` 继续表示实际处理时间。
+
+`source_name` 会从文件名里的 `YYYY-MM-DD`、`YYYY_MM_DD` 或 `YYYYMMDD` 解析日期；`source_mtime` 会读取源图片修改时间。`source_name` 或 `source_mtime` 解析失败时，命令会输出 `date warning`，并回退到处理时间作为 `note_date`。
 
 ### Markdown 模板
 
@@ -112,7 +114,7 @@ markdown:
     missing_behavior: "fallback"  # fallback | fail
 ```
 
-模板变量使用受限 `{{variable}}` 替换，不执行表达式。支持变量：`title`、`created_at`、`date`、`source_basename`、`source_image`、`source_hash`、`ocr_mode`、`ocr_provider`、`ocr_model`、`language`、`status`、`tags_yaml`、`recognized_markdown`、`uncertain_items`、`raw_ocr`、`processing_info`。
+模板变量使用受限 `{{variable}}` 替换，不执行表达式。支持变量：`title`、`created_at`、`date`、`source_basename`、`source_image`、`source_hash`、`ocr_mode`、`ocr_provider`、`ocr_model`、`language`、`status`、`tags_yaml`、`recognized_markdown`、`uncertain_items`、`raw_ocr`、`processing_info`。其中 `date` 是 `markdown.date_folder.date_source` 解析出的 `note_date`，`created_at` 是处理时间。
 
 示例：
 
@@ -165,7 +167,7 @@ index:
 <!-- handwriting-ocr:index:end -->
 ```
 
-重复图片被去重时不会新增笔记，也不会新增索引项。索引页不可写时，Markdown 生成仍保持成功，命令输出会包含 index warning。
+重复图片被去重时不会新增笔记，也不会新增索引项。`grouping: "date"` 使用每条笔记持久化在 SQLite 中的 `note_date` 分组；旧记录没有 `note_date` 时会回退到处理时间。索引页不可写时，Markdown 生成仍保持成功，命令输出会包含 index warning。
 
 ### V1 配置兼容
 

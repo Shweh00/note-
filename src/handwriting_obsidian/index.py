@@ -21,6 +21,7 @@ class IndexEntry:
     title: str
     status: str
     created_at: str
+    note_date: str | None
 
 
 def index_path(config: AppConfig) -> Path:
@@ -65,17 +66,18 @@ def _entry(record: StateRecord) -> IndexEntry:
         title=note_path.stem,
         status=record.status,
         created_at=record.created_at,
+        note_date=record.note_date,
     )
 
 
 def _render_block(config: AppConfig, index_dir: Path, entries: list[IndexEntry]) -> str:
     reverse = config.index.sort == "desc"
-    sorted_entries = sorted(entries, key=lambda entry: (entry.created_at, entry.note_path.as_posix()), reverse=reverse)
+    sorted_entries = sorted(entries, key=lambda entry: (entry.note_date or entry.created_at[:10], entry.created_at, entry.note_path.as_posix()), reverse=reverse)
     lines = [INDEX_START]
     if config.index.grouping == "date":
         grouped: OrderedDict[str, list[IndexEntry]] = OrderedDict()
         for entry in sorted_entries:
-            grouped.setdefault(entry.created_at[:10], []).append(entry)
+            grouped.setdefault(entry.note_date or entry.created_at[:10], []).append(entry)
         for date, group in grouped.items():
             lines.extend(["", f"## {date}", ""])
             lines.extend(_entry_line(config, index_dir, entry) for entry in group)

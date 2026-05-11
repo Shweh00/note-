@@ -10,7 +10,7 @@ import time
 
 from .config import AppConfig
 from .index import update_index
-from .markdown import build_note_path, render_note, resolve_note_output_dir, slugify
+from .markdown import build_note_path, render_date_folder, render_note, resolve_note_date, slugify
 from .ocr import OcrEngine
 from .state import ProcessingState, StateRecord
 
@@ -135,7 +135,12 @@ def process_image(
 
         ocr_result = ocr_engine.recognize(image_path, language=config.ocr.language)
         created_at = datetime.now(timezone.utc)
-        note_output_dir = resolve_note_output_dir(config, image_path, created_at)
+        note_date = resolve_note_date(config, image_path, created_at)
+        for warning in note_date.warnings:
+            print(warning, flush=True)
+        note_output_dir = config.output_dir
+        if config.markdown.date_folder.enabled:
+            note_output_dir = config.output_dir / render_date_folder(config.markdown.date_folder.pattern, note_date.value)
         note_output_dir.mkdir(parents=True, exist_ok=True)
         note_path = build_note_path(
             note_output_dir,
@@ -143,6 +148,7 @@ def process_image(
             created_at,
             image_hash,
             config.markdown.filename_template,
+            note_date.value,
         )
 
         archived_path = planned_archive_path(image_path, config.archive.after_success, config.processed_dir)
@@ -151,6 +157,7 @@ def process_image(
             config=config,
             title=image_path.stem,
             created_at=created_at,
+            note_date=note_date.value,
             source_basename=image_path.name,
             source_image_relative=relative_image,
             image_hash=image_hash,
@@ -169,11 +176,13 @@ def process_image(
             ocr_provider=ocr_result.provider,
             ocr_model=ocr_result.model,
             language=ocr_result.language,
+            note_date=note_date.value.strftime("%Y-%m-%d"),
         )
         warnings = update_index(config, state)
         for warning in warnings:
             print(warning, flush=True)
-        reason = "processed" if not warnings else "processed; " + "; ".join(warnings)
+        all_warnings = [*note_date.warnings, *warnings]
+        reason = "processed" if not all_warnings else "processed; " + "; ".join(all_warnings)
         return ProcessResult(image_path=image_path, note_path=note_path, status="success", reason=reason)
     except Exception as exc:
         message = str(exc)

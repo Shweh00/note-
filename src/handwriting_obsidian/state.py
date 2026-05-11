@@ -25,6 +25,7 @@ class StateRecord:
     ocr_provider: str | None
     ocr_model: str | None
     language: str | None
+    note_date: str | None
     created_at: str
     updated_at: str
 
@@ -67,11 +68,18 @@ class ProcessingState:
               ocr_provider TEXT,
               ocr_model TEXT,
               language TEXT,
+              note_date TEXT,
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL
             )
             """
         )
+        columns = {
+            str(row["name"])
+            for row in self.connection.execute("PRAGMA table_info(processed_files)").fetchall()
+        }
+        if "note_date" not in columns:
+            self.connection.execute("ALTER TABLE processed_files ADD COLUMN note_date TEXT")
         self.connection.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_processed_files_hash_success
@@ -145,6 +153,7 @@ class ProcessingState:
             "duplicate",
             output_path=existing.output_path,
             archived_path=str(archived_path) if archived_path else existing.archived_path,
+            note_date=existing.note_date,
         )
         return record_id
 
@@ -201,6 +210,7 @@ def _record(row: sqlite3.Row) -> StateRecord:
         ocr_provider=row["ocr_provider"],
         ocr_model=row["ocr_model"],
         language=row["language"],
+        note_date=row["note_date"] if "note_date" in row.keys() else None,
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )
