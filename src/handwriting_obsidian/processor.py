@@ -9,28 +9,29 @@ import shutil
 import time
 
 from .config import AppConfig
-from .markdown import render_note, slugify
+from .markdown import build_note_path, render_note, slugify
 from .ocr import OcrEngine
-from .state import ProcessingState
+from .state import ProcessingState, StateRecord
 
 
 @dataclass(frozen=True)
 class ProcessResult:
     image_path: Path
     note_path: Path | None
-    skipped: bool
+    status: str
     reason: str
 
+    @property
+    def skipped(self) -> bool:
+        return self.status in {"duplicate", "unsupported", "missing"}
 
-def discover_images(input_dir: Path, extensions: tuple[str, ...]) -> list[Path]:
+
+def discover_images(input_dir: Path, extensions: tuple[str, ...], *, recursive: bool = False) -> list[Path]:
     if not input_dir.exists():
         return []
     allowed = {ext.lower() for ext in extensions}
-    return sorted(
-        path
-        for path in input_dir.rglob("*")
-        if path.is_file() and path.suffix.lower() in allowed
-    )
+    pattern = "**/*" if recursive else "*"
+    return sorted(path for path in input_dir.glob(pattern) if path.is_file() and path.suffix.lower() in allowed)
 
 
 def fingerprint(path: Path) -> str:
@@ -41,8 +42,32 @@ def fingerprint(path: Path) -> str:
     return digest.hexdigest()
 
 
+def wait_until_stable(path: Path, seconds: float) -> None:
+    if seconds <= 0:
+        return
+    first = path.stat()
+    time.sleep(min(seconds, 2))
+    second = path.stat()
+    if first.st_size != second.st_size or first.st_mtime != second.st_mtime:
+        time.sleep(min(seconds, 2))
+
+
 def relative_markdown_path(from_dir: Path, target: Path) -> str:
     return Path(os.path.relpath(target, start=from_dir)).as_posix()
+
+
+def archive_image(image_path: Path, config: AppConfig, action: str, target_dir: Path) -> Path:
+    if action == "keep":
+        return image_path
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = _unique_path(target_dir / image_path.name)
+    if action == "copy":
+        shutil.copy2(image_path, target)
+    elif action == "move":
+        shutil.move(str(image_path), str(target))
+    else:
+        raise ValueError(f"Unsupported archive action: {action}")
+    return target
 
 
 def process_image(
@@ -52,61 +77,119 @@ def process_image(
     state: ProcessingState,
     ocr_engine: OcrEngine,
 ) -> ProcessResult:
-    image_hash = fingerprint(image_path)
-    if state.has_hash(image_hash):
-        return ProcessResult(image_path=image_path, note_path=None, skipped=True, reason="duplicate")
+    if image_path.suffix.lower() not in config.extensions:
+        return ProcessResult(image_path=image_path, note_path=None, status="unsupported", reason="unsupported extension")
 
-    config.output_dir.mkdir(parents=True, exist_ok=True)
-    config.assets_dir.mkdir(parents=True, exist_ok=True)
+    record_id: int | None = None
+    try:
+        wait_until_stable(image_path, config.watch.settle_seconds)
+        stat = image_path.stat()
+        image_hash = fingerprint(image_path)
+        existing = state.successful_by_hash(image_hash)
+        if existing:
+            state.duplicate(source_path=image_path, source_hash=image_hash, file_size=stat.st_size, mtime=stat.st_mtime, existing=existing)
+            return ProcessResult(image_path=image_path, note_path=Path(existing.output_path) if existing.output_path else None, status="duplicate", reason="duplicate")
 
-    created_at = datetime.now(timezone.utc)
-    slug = slugify(image_path.stem)
-    short_hash = image_hash[:8]
-    asset_name = f"{slug}-{short_hash}{image_path.suffix.lower()}"
-    note_name = f"{created_at.strftime('%Y%m%d-%H%M%S')}-{slug}-{short_hash}.md"
-    asset_path = config.assets_dir / asset_name
-    note_path = config.output_dir / note_name
+        record_id = state.insert_pending(
+            source_path=image_path,
+            source_hash=image_hash,
+            file_size=stat.st_size,
+            mtime=stat.st_mtime,
+        )
+        state.update(record_id, "processing")
 
-    shutil.copy2(image_path, asset_path)
-    recognized_text = ocr_engine.recognize(image_path)
-    asset_relative = relative_markdown_path(config.output_dir, asset_path)
+        ocr_result = ocr_engine.recognize(image_path, language=config.ocr.language)
+        config.output_dir.mkdir(parents=True, exist_ok=True)
+        created_at = datetime.now(timezone.utc)
+        note_path = build_note_path(config.output_dir, image_path.stem, created_at, image_hash)
 
-    markdown = render_note(
-        title=image_path.stem,
-        created_at=created_at,
-        source_image=image_path.resolve(),
-        image_hash=image_hash,
-        tags=config.tags,
-        asset_relative_path=asset_relative,
-        recognized_text=recognized_text,
-    )
-    note_path.write_text(markdown, encoding="utf-8")
+        archived_path = archive_image(image_path, config, config.archive.after_success, config.processed_dir)
+        relative_image = relative_markdown_path(config.output_dir, archived_path)
+        markdown = render_note(
+            config=config,
+            title=image_path.stem,
+            created_at=created_at,
+            source_basename=image_path.name,
+            source_image_relative=relative_image,
+            image_hash=image_hash,
+            ocr_result=ocr_result,
+        )
+        tmp_path = note_path.with_suffix(note_path.suffix + ".tmp")
+        tmp_path.write_text(markdown, encoding="utf-8")
+        tmp_path.replace(note_path)
 
-    state.mark_processed(
-        image_hash,
-        {
-            "source_image": str(image_path.resolve()),
-            "note_path": str(note_path.resolve()),
-            "asset_path": str(asset_path.resolve()),
-            "processed_at": created_at.isoformat(),
-        },
-    )
-    state.save()
-    return ProcessResult(image_path=image_path, note_path=note_path, skipped=False, reason="processed")
+        state.update(
+            record_id,
+            "success",
+            output_path=str(note_path),
+            archived_path=str(archived_path),
+            ocr_provider=ocr_result.provider,
+            ocr_model=ocr_result.model,
+            language=ocr_result.language,
+        )
+        return ProcessResult(image_path=image_path, note_path=note_path, status="success", reason="processed")
+    except Exception as exc:
+        message = str(exc)
+        try:
+            stat = image_path.stat()
+            image_hash = fingerprint(image_path)
+            if record_id is None:
+                record_id = state.insert_pending(
+                    source_path=image_path,
+                    source_hash=image_hash,
+                    file_size=stat.st_size,
+                    mtime=stat.st_mtime,
+                )
+            archived_path = archive_image(image_path, config, config.archive.after_error, config.error_dir)
+            state.update(record_id, "failed", archived_path=str(archived_path), error_message=message)
+        except Exception:
+            pass
+        return ProcessResult(image_path=image_path, note_path=None, status="failed", reason=message)
 
 
 def process_batch(config: AppConfig, ocr_engine: OcrEngine) -> list[ProcessResult]:
-    state = ProcessingState.load(config.state_path)
-    results = []
-    for image_path in discover_images(config.input_dir, config.extensions):
-        results.append(process_image(image_path, config=config, state=state, ocr_engine=ocr_engine))
-    return results
+    with ProcessingState.open(config.state_path) as state:
+        return [
+            process_image(image_path, config=config, state=state, ocr_engine=ocr_engine)
+            for image_path in discover_images(config.input_dir, config.extensions, recursive=config.watch.recursive)
+        ]
+
+
+def retry_failed(config: AppConfig, ocr_engine: OcrEngine) -> list[ProcessResult]:
+    with ProcessingState.open(config.state_path) as state:
+        failed = state.failed_records()
+        results: list[ProcessResult] = []
+        for record in failed:
+            path = _retry_source_path(record)
+            if path.exists():
+                results.append(process_image(path, config=config, state=state, ocr_engine=ocr_engine))
+            else:
+                results.append(ProcessResult(image_path=path, note_path=None, status="missing", reason="failed source is missing"))
+        return results
 
 
 def watch(config: AppConfig, ocr_engine: OcrEngine) -> None:
     while True:
         results = process_batch(config, ocr_engine)
-        processed = [result for result in results if not result.skipped]
-        for result in processed:
-            print(f"processed {result.image_path} -> {result.note_path}", flush=True)
-        time.sleep(config.watch_interval_seconds)
+        for result in results:
+            if result.status == "success":
+                print(f"processed {result.image_path} -> {result.note_path}", flush=True)
+        time.sleep(max(config.watch.settle_seconds, 1))
+
+
+def _unique_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    stem = slugify(path.stem)
+    for index in range(1, 10_000):
+        candidate = path.with_name(f"{stem}-{index}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError(f"could not find unique path for {path}")
+
+
+def _retry_source_path(record: StateRecord) -> Path:
+    archived = Path(record.archived_path) if record.archived_path else None
+    if archived and archived.exists():
+        return archived
+    return Path(record.source_path)

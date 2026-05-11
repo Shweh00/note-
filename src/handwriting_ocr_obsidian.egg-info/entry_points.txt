@@ -1,0 +1,3 @@
+[console_scripts]
+handwriting-obsidian = handwriting_obsidian.cli:main
+handwriting-ocr = handwriting_ocr.cli:main

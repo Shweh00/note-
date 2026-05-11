@@ -1,0 +1,37 @@
+watch:
+  input_dir: "Inbox/HandwritingImages"
+  output_dir: "Inbox/HandwritingNotes"
+  processed_dir: "Inbox/HandwritingImages/processed"
+  error_dir: "Inbox/HandwritingImages/error"
+  settle_seconds: 1
+  recursive: false
+  polling: true
+
+ocr:
+  mode: "mock"
+  provider: "mock"
+  model: "mock"
+  language: "zh-cn,en"
+  retry_count: 3
+  timeout_seconds: 120
+  api_key_env: "OPENAI_API_KEY"
+  fallback_text: "TODO: replace with OCR text"
+
+markdown:
+  filename_template: "{{date}}-{{source_basename}}.md"
+  include_frontmatter: true
+  include_source_image: true
+  include_raw_ocr: true
+  default_tags: ["handwriting", "ocr", "to-review"]
+
+state:
+  sqlite_path: ".handwriting-ocr/state.sqlite"
+  log_path: ".handwriting-ocr/handwriting-ocr.log"
+
+dedupe:
+  strategy: "content_hash"
+  on_duplicate: "skip"
+
+archive:
+  after_success: "move"
+  after_error: "move"

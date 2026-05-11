@@ -9,8 +9,8 @@ output_dir = "vault/Handwriting Notes"
 # Images are copied here so the generated notes can embed them reliably.
 assets_dir = "vault/Handwriting Notes/assets"
 
-# JSON state file used for de-duplication.
-state_path = ".handwriting-obsidian-state.json"
+# SQLite state file used for de-duplication.
+state_path = ".handwriting-ocr/state.sqlite"
 
 # Supported image extensions.
 extensions = [".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp"]

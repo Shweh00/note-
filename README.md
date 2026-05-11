@@ -1,8 +1,6 @@
-# Handwriting Obsidian
+# Handwriting OCR Obsidian
 
-本地手写图片整理工具：把指定文件夹中的图片识别为文本，并生成适合 Obsidian 阅读的 Markdown 笔记。
-
-基础流程不需要任何外部付费凭据。默认 `mock` OCR 会读取同名 `.txt` sidecar 文件作为识别结果，例如 `note.png` 对应 `note.txt`；没有 sidecar 时会写入配置中的占位文本。之后可以把 OCR provider 换成本机 `tesseract`。
+本地 CLI 工具：把输入文件夹里的手写图片识别成文字，并生成 Obsidian 可直接阅读的 Markdown。默认 `mock` OCR 不需要网络、API key 或外部付费凭据，适合先跑通批处理、监听、去重和 Markdown 模板。
 
 ## 安装
 
@@ -13,116 +11,98 @@ python -m venv .venv
 pip install -e ".[dev]"
 ```
 
-也可以不安装，直接从源码目录运行：
+不安装也可以从源码运行：
 
 ```bash
-PYTHONPATH=src python -m handwriting_obsidian --help
+PYTHONPATH=src python -m handwriting_ocr --help
 ```
 
-## 配置
+## 初始化
 
-复制示例配置：
+推荐把配置放进 Obsidian vault：
 
 ```bash
-cp config.example.toml config.toml
+handwriting-ocr init --vault ~/ObsidianVault
 ```
 
-关键字段：
+这会创建：
 
-- `input_dir`: 新上传手写图片的目录。
-- `output_dir`: Markdown 输出目录，建议放在 Obsidian vault 中。
-- `assets_dir`: 原图副本目录，生成的 Markdown 会引用这里的图片。
-- `state_path`: 去重状态文件，同一图片内容不会重复处理。
-- `tags`: 每篇笔记的默认标签。
-- `[ocr].provider`: 默认 `mock`，无需服务凭据。
+- `Inbox/HandwritingImages/`
+- `Inbox/HandwritingNotes/`
+- `Inbox/HandwritingImages/processed/`
+- `Inbox/HandwritingImages/error/`
+- `.handwriting-ocr/config.yaml`
+- `.handwriting-ocr/state.sqlite`
 
-## 批处理已有图片
+也可以复制仓库里的示例：
 
 ```bash
-handwriting-obsidian batch --config config.toml
+cp config.example.yaml config.yaml
 ```
 
-或：
+## Mock OCR
+
+默认配置：
+
+```yaml
+ocr:
+  mode: "mock"
+  provider: "mock"
+```
+
+把图片和同名 `.txt` 放入输入目录，例如 `page.png` 和 `page.txt`。批处理会把 `page.txt` 的内容作为识别结果写入 Markdown；没有 sidecar 时写入 `fallback_text`。这个流程完全离线。
+
+## 常用命令
 
 ```bash
-python -m handwriting_obsidian batch --config config.toml
+handwriting-ocr batch --config ~/ObsidianVault/.handwriting-ocr/config.yaml
+handwriting-ocr watch --config ~/ObsidianVault/.handwriting-ocr/config.yaml
+handwriting-ocr status --config ~/ObsidianVault/.handwriting-ocr/config.yaml
+handwriting-ocr retry-failed --config ~/ObsidianVault/.handwriting-ocr/config.yaml
+handwriting-ocr doctor --config ~/ObsidianVault/.handwriting-ocr/config.yaml
 ```
 
-## 持续监听新图片
+`batch` 处理现有图片；`watch` 持续轮询新增图片，按 `Ctrl+C` 停止；`status` 显示 SQLite 中的成功、失败、重复和最近失败；`retry-failed` 重新处理失败记录；`doctor` 检查目录、SQLite 和 OCR 凭据。
 
-```bash
-handwriting-obsidian watch --config config.toml
-```
+## Obsidian 输出
 
-`watch` 使用轮询方式，适合本地文件夹、同步盘和 NAS 场景。按 `Ctrl+C` 停止。
+每张图片生成一篇 Markdown，包含 YAML frontmatter、Obsidian 图片嵌入、识别正文、可能不确定内容、原始 OCR 和处理信息。默认状态是 `to-review`，方便人工校对。
 
-## Markdown 输出格式
-
-每张图片生成一篇 Markdown，包含：
-
-- YAML front matter: 标题、创建时间、源文件、图片哈希、标签。
-- 原图嵌入：`![](assets/...)`。
-- 识别文本。
-- 处理时间和原始路径。
-
-示例：
+输出示例片段：
 
 ```markdown
 ---
-title: "meeting-notes"
-created: "2026-05-11T10:30:00+00:00"
-source_image: "/path/to/incoming/meeting-notes.png"
-image_hash: "..."
+title: "手写识别 - meeting-notes"
+source_hash: "sha256:..."
+ocr_provider: "mock"
+status: "to-review"
 tags:
   - handwriting
   - ocr
+  - to-review
 ---
 
-# meeting-notes
-
-![](assets/meeting-notes-abc12345.png)
-
-## 识别文本
-
-今天的会议重点...
+![[../HandwritingImages/processed/meeting-notes.jpg]]
 ```
 
-## Mock OCR 用法
+## 在线 OCR 与隐私
 
-把图片和同名 `.txt` 放在 `input_dir`：
+在线 OCR 需要配置 API key，并会把图片发送到外部服务。敏感内容请使用 `mock` 或未来离线 provider。MVP 中 `openai` provider 会在缺少 `OPENAI_API_KEY` 时由 `doctor` 明确报错；基础流程不依赖它。
 
-```text
-incoming/
-  page-1.png
-  page-1.txt
-```
+## HEIC 限制
 
-运行批处理后，`page-1.txt` 的内容会进入生成的 Markdown。这个流程可用于没有真实 OCR 服务时的开发、测试和整理模板验证。
+配置允许 `.heic` 扩展名，但当前 MVP 不内置 HEIC 转换依赖。如果系统环境不能读取或转换 HEIC，请先转成 JPG/PNG，或安装本机转换工具后扩展 provider。
 
-## 可选：本机 Tesseract OCR
+## 常见问题
 
-如果机器上已安装 `tesseract`，可在配置中使用：
-
-```toml
-[ocr]
-provider = "tesseract"
-command = "tesseract"
-languages = "eng+chi_sim"
-```
-
-工具会执行 `tesseract <image> stdout -l <languages>`。没有安装时请继续使用默认 `mock` provider。
+- 目录不可写：运行 `handwriting-ocr doctor --config ...`，它会检查输出、归档、错误目录。
+- 重复图片没有生成新笔记：工具按内容 SHA-256 去重，已成功处理的相同内容会记录为 `duplicate`。
+- OCR 失败：查看 `status` 最近失败，然后修复配置或凭据，运行 `retry-failed`。
+- Obsidian 看不到图片：确认输出目录和 processed 目录都在同一个 vault 中，Markdown 使用相对 Obsidian embed 链接。
 
 ## 测试
 
 ```bash
 cd /workspace/project
-python -m pytest
+PYTHONPATH=src pytest --cov=handwriting_obsidian --cov-report=term-missing --cov-fail-under=95
 ```
-
-没有安装 pytest 时也可以运行标准库测试：
-
-```bash
-PYTHONPATH=src python -m unittest discover -s tests -v
-```
-
-测试包含一个不依赖真实 OCR 服务的 mock/stub 流程，覆盖批处理、Markdown 生成、图片复制和去重状态。
