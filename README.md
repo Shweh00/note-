@@ -6,10 +6,12 @@
 
 ```bash
 cd /workspace/project
-python -m venv .venv
+python3 -m venv .venv
 . .venv/bin/activate
 pip install -e ".[dev]"
 ```
+
+如果你的系统只提供 `python` 且它指向 Python 3，请把上面的 `python3 -m venv .venv` 替换为 `python -m venv .venv`；在不少 Linux/macOS 干净环境中只有 `python3` 命令。
 
 不安装也可以从源码运行：
 
@@ -319,3 +321,5 @@ printf 'fake image bytes' > "$tmp/Inbox/HandwritingImages/meeting.png"
 handwriting-ocr batch --config "$tmp/.handwriting-ocr/config.yaml"
 handwriting-ocr status --config "$tmp/.handwriting-ocr/config.yaml"
 ```
+
+预期会在 `"$tmp/Inbox/HandwritingNotes/"` 下生成 `YYYY-MM-DD-meeting.md`，例如当天日期为 2026-05-11 时文件名为 `2026-05-11-meeting.md`。
