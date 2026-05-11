@@ -9,12 +9,12 @@
 ```bash
 export HW_SAMPLE_VAULT=/tmp/hw-real-sample-vault
 cd /workspace/project
-.venv/bin/handwriting-ocr init --vault "$HW_SAMPLE_VAULT" --force
-mkdir -p "$HW_SAMPLE_VAULT/Inbox/HandwritingImages/real-samples"
-mkdir -p "$HW_SAMPLE_VAULT/.handwriting-ocr/real-samples/expected"
-cp docs/sample-manifest.template.yaml "$HW_SAMPLE_VAULT/.handwriting-ocr/real-samples/sample-manifest.yaml"
-cp docs/sample.expected.md.template "$HW_SAMPLE_VAULT/.handwriting-ocr/real-samples/expected/2026-05-11_001_zh_meeting_clear.expected.md"
+. .venv/bin/activate
+handwriting-ocr init-sample-vault --vault "$HW_SAMPLE_VAULT"
+handwriting-ocr validate-samples --vault "$HW_SAMPLE_VAULT"
 ```
+
+最后一条命令在刚初始化后应返回失败，这是预期结果：骨架还没有 18 张真实脱敏图片，manifest 的 `image_sha256` 仍是 `TODO`，manifest 和 expected frontmatter 的 `privacy_checked` 仍是 `false`，expected 正文也还是占位文本。只有人工补齐这些内容后，`validate-samples` 才可能通过。
 
 图片放在：
 
@@ -34,7 +34,7 @@ $HW_SAMPLE_VAULT/.handwriting-ocr/real-samples/sample-manifest.yaml
 $HW_SAMPLE_VAULT/.handwriting-ocr/real-samples/expected/<sample_id>.expected.md
 ```
 
-复验前把配置里的 `watch.input_dir` 临时改为绝对路径 `$HW_SAMPLE_VAULT/Inbox/HandwritingImages/real-samples`。如果手动编辑 YAML 时不展开环境变量，也可以写成相对配置文件目录的 `../Inbox/HandwritingImages/real-samples`，因为配置文件位于 `$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml`。如需隔离归档，也把 `watch.processed_dir` 和 `watch.error_dir` 指向真实样例目录下的 `_processed`、`_errors`；否则可把 18 张图片复制到默认 `Inbox/HandwritingImages/`。为了避免 mock sidecar 影响真实 OCR，真实样例目录内不要放同名 `.txt`。
+`init-sample-vault` 会把配置里的 `watch.input_dir` 写成绝对路径 `$HW_SAMPLE_VAULT/Inbox/HandwritingImages/real-samples`，并把 `watch.processed_dir` 和 `watch.error_dir` 指向真实样例目录下的 `_processed`、`_errors`。已有配置若指向其他工作目录，命令默认返回 `2`，避免静默改动真实 vault；确认只覆盖样例 scaffold 时再使用 `--force`。为了避免 mock sidecar 影响真实 OCR，真实样例目录内不要放同名 `.txt`。
 
 准备完成后先运行准入校验。校验会检查 `sample-manifest.yaml`、18 张图片、命名规则、18 个 `.expected.md` 文件、manifest 与 expected frontmatter 的 `privacy_checked: true`、图片 SHA-256，以及配置里的 `watch.input_dir` 是否指向样例图片目录：
 
@@ -117,7 +117,7 @@ YYYY-MM-DD_NNN_<lang>_<scenario>_<quality>.<ext>
 
 ## 参考文本格式
 
-每张图片维护一个 `.expected.md` 文件。参考文本不是要求 OCR 完全逐字一致，而是给 api-tester 做人工和半自动复验的基准。请从 `docs/sample.expected.md.template` 复制后填写：
+每张图片维护一个 `.expected.md` 文件。参考文本不是要求 OCR 完全逐字一致，而是给 api-tester 做人工和半自动复验的基准。请从 `init-sample-vault` 生成的 18 个占位文件开始填写：
 
 - `sample_id`、`image_file`、`language`、`scenario`、`quality_tags` 必须和清单一致。
 - `expected_text` 写人工转写的正文，保持原始换行和列表层级。
@@ -128,7 +128,7 @@ YYYY-MM-DD_NNN_<lang>_<scenario>_<quality>.<ext>
 
 ## sample-manifest 填写规则
 
-从 `docs/sample-manifest.template.yaml` 复制后，逐项填写：
+从 `init-sample-vault` 生成的 `sample-manifest.yaml` 开始填写：
 
 - `dataset.id`：建议 `real-handwriting-min18-YYYYMMDD`。
 - `dataset.owner`：样例维护者或代理名，不写个人真实姓名。
@@ -154,8 +154,10 @@ cd /workspace/project
 . .venv/bin/activate
 export HW_SAMPLE_VAULT=/tmp/hw-real-sample-vault
 
-handwriting-ocr doctor --config "$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml"
+handwriting-ocr init-sample-vault --vault "$HW_SAMPLE_VAULT"
+# The first validation fails until images, hashes, transcriptions, and privacy checks are completed.
 handwriting-ocr validate-samples --vault "$HW_SAMPLE_VAULT"
+handwriting-ocr doctor --config "$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml"
 handwriting-ocr batch --config "$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml"
 handwriting-ocr status --config "$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml"
 ```

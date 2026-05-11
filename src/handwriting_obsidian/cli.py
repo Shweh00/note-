@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from argparse import ArgumentParser
+from datetime import date
 import json
 from pathlib import Path
 import importlib
@@ -14,6 +15,12 @@ from .config import AppConfig, load_config
 from .ocr import configured_paddle_model_dirs, create_ocr_engine, missing_required_paddle_model_dirs
 from .processor import process_batch, retry_failed, watch
 from .sample_validator import validate_sample_vault
+from .sample_vault_init import (
+    InitSampleVaultError,
+    format_result_text,
+    init_sample_vault,
+    result_to_json,
+)
 from .state import ProcessingState
 
 
@@ -52,6 +59,17 @@ def build_parser() -> ArgumentParser:
     validate_parser.add_argument("--format", choices=("text", "json"), default="text", help="Output format.")
     validate_parser.add_argument("--strict", action="store_true", help="Treat warnings as failures.")
     validate_parser.add_argument("--no-hash", action="store_true", help="Skip sha256 recomputation for local preflight only.")
+
+    init_sample_parser = subparsers.add_parser(
+        "init-sample-vault",
+        help="Create a local real-sample vault scaffold only; does not OCR, upload, or mark privacy as checked.",
+    )
+    init_sample_parser.add_argument("--vault", required=True, help="Local test vault root to create or complete.")
+    init_sample_parser.add_argument("--date", type=_parse_cli_date, default=date.today(), help="Sample date as YYYY-MM-DD.")
+    init_sample_parser.add_argument("--owner", default=None, help="Dataset owner label; defaults to current system user.")
+    init_sample_parser.add_argument("--force", action="store_true", help="Overwrite scaffold manifest, expected files, and sample config paths.")
+    init_sample_parser.add_argument("--dry-run", action="store_true", help="Print the scaffold plan without writing files.")
+    init_sample_parser.add_argument("--format", choices=("text", "json"), default="text", help="Output format.")
 
     init_config_parser = subparsers.add_parser("init-config", help="Compatibility alias for creating config.yaml.")
     init_config_parser.add_argument("--output", default="config.yaml")
@@ -143,6 +161,28 @@ def run_validate_samples(args: object) -> int:
     return 1 if failed else 0
 
 
+def run_init_sample_vault(args: object) -> int:
+    try:
+        result = init_sample_vault(
+            Path(args.vault),
+            sample_date=args.date,
+            owner=args.owner,
+            force=args.force,
+            dry_run=args.dry_run,
+        )
+    except InitSampleVaultError as exc:
+        if args.format == "json":
+            print(json.dumps({"status": "blocked", "code": exc.code, "error": exc.message}, ensure_ascii=False, indent=2))
+        else:
+            print(f"ERROR {exc.code}: {exc.message}", file=sys.stderr)
+        return exc.exit_code
+    if args.format == "json":
+        print(result_to_json(result))
+    else:
+        print(format_result_text(result))
+    return 0
+
+
 def init_vault(vault: str, force: bool) -> int:
     root = Path(vault).expanduser().resolve()
     config_dir = root / ".handwriting-ocr"
@@ -184,6 +224,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_doctor(args.config)
         if args.command == "validate-samples":
             return run_validate_samples(args)
+        if args.command == "init-sample-vault":
+            return run_init_sample_vault(args)
         if args.command == "init":
             return init_vault(args.vault, args.force)
         if args.command == "init-config":
@@ -192,6 +234,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     raise AssertionError(f"unhandled command {args.command}")  # pragma: no cover
+
+
+def _parse_cli_date(value: str) -> date:
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        from argparse import ArgumentTypeError
+
+        raise ArgumentTypeError("--date must use YYYY-MM-DD") from exc
 
 
 def _summary(results: list[object]) -> str:

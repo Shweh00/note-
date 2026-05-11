@@ -28,6 +28,8 @@ from handwriting_obsidian.processor import (
     wait_until_stable,
 )
 from handwriting_obsidian.sample_validator import validate_sample_vault
+import handwriting_obsidian.sample_vault_init as sample_vault_init
+from handwriting_obsidian.sample_vault_init import _expected_file_text, _replace_section
 from handwriting_obsidian.state import ProcessingState
 
 
@@ -1368,6 +1370,242 @@ def test_validate_samples_cli_accepts_complete_real_sample_vault(
     assert main(["validate-samples", "--vault", str(vault), "--format", "json"]) == 0
     result = json.loads(capsys.readouterr().out)
     assert result["summary"]["valid_samples"] == 18
+
+
+def test_init_sample_vault_creates_scaffold_that_validate_rejects(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    vault = tmp_path / "new sample vault"
+
+    assert main(["init-sample-vault", "--vault", str(vault), "--date", "2026-06-02", "--owner", "collector"]) == 0
+    output = capsys.readouterr().out
+
+    image_dir = vault / "Inbox" / "HandwritingImages" / "real-samples"
+    expected_dir = vault / ".handwriting-ocr" / "real-samples" / "expected"
+    manifest_path = vault / ".handwriting-ocr" / "real-samples" / "sample-manifest.yaml"
+    config_path = vault / ".handwriting-ocr" / "config.yaml"
+    assert "sample vault scaffold: READY" in output
+    assert "image_sha256 TODO" in output
+    assert "privacy_checked: true only after redaction" in output
+    assert image_dir.is_dir()
+    assert (image_dir / "_processed").is_dir()
+    assert (image_dir / "_errors").is_dir()
+    assert (vault / "Inbox" / "HandwritingNotes").is_dir()
+    assert expected_dir.is_dir()
+    assert len(list(expected_dir.glob("*.expected.md"))) == 18
+
+    import yaml
+
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["dataset"]["id"] == "real-handwriting-min18-20260602"
+    assert manifest["dataset"]["owner"] == "collector"
+    assert manifest["dataset"]["created_at"] == "2026-06-02"
+    assert manifest["dataset"]["privacy_level"] == "redacted-local-only"
+    assert manifest["validation"]["minimum_sample_count"] == 18
+    assert len(manifest["samples"]) == 18
+    assert manifest["samples"][0]["sample_id"] == "2026-06-02_001_zh_meeting_clear"
+    assert manifest["samples"][11]["image_file"] == "2026-06-02_012_mixed_recipe_shadow.png"
+    assert {sample["image_sha256"] for sample in manifest["samples"]} == {"TODO"}
+    assert {sample["privacy_checked"] for sample in manifest["samples"]} == {False}
+    assert "validate-samples" in "\n".join(manifest["validation"]["required_commands"])
+
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert Path(config["watch"]["input_dir"]) == image_dir
+    assert Path(config["watch"]["processed_dir"]) == image_dir / "_processed"
+    assert Path(config["watch"]["error_dir"]) == image_dir / "_errors"
+
+    expected = (expected_dir / "2026-06-02_001_zh_meeting_clear.expected.md").read_text(encoding="utf-8")
+    assert 'sample_id: 2026-06-02_001_zh_meeting_clear' in expected
+    assert 'image_file: 2026-06-02_001_zh_meeting_clear.jpg' in expected
+    assert "privacy_checked: false" in expected
+    assert "## expected_text" in expected
+    assert "TODO: replace with redacted human transcription" in expected
+    assert "## must_include" in expected
+    assert '"会议"' in expected
+    assert "## acceptable_variants" in expected
+    assert "## ignore_regions" in expected
+    assert "## notes_for_reviewer" in expected
+
+    assert main(["validate-samples", "--vault", str(vault)]) == 1
+    validation_output = capsys.readouterr().out
+    assert "sample validation: FAIL" in validation_output
+    assert "FAIL SAMPLE_COUNT_TOO_LOW:" in validation_output
+    assert "FAIL SAMPLE_HASH_MISSING:" in validation_output
+    assert "FAIL SAMPLE_PRIVACY_NOT_CHECKED:" in validation_output
+    assert "FAIL EXPECTED_TEXT_PLACEHOLDER:" in validation_output
+
+
+def test_init_sample_vault_json_output_is_single_object(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    vault = tmp_path / "json-vault"
+
+    assert main(["init-sample-vault", "--vault", str(vault), "--date", "2026-01-03", "--format", "json"]) == 0
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+
+    assert captured.err == ""
+    assert result["status"] == "ready"
+    assert result["vault"] == str(vault.resolve())
+    assert result["manifest"].endswith(".handwriting-ocr/real-samples/sample-manifest.yaml")
+    assert len([path for path in result["created_files"] if path.endswith(".expected.md")]) == 18
+    assert result["skipped_files"] == []
+    assert result["dry_run"] is False
+    assert result["next_commands"][0].startswith("handwriting-ocr validate-samples")
+
+
+def test_init_sample_vault_dry_run_writes_nothing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    vault = tmp_path / "dry-vault"
+
+    assert main(["init-sample-vault", "--vault", str(vault), "--dry-run", "--format", "json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["status"] == "ready"
+    assert result["dry_run"] is True
+    assert any(path.endswith("sample-manifest.yaml") for path in result["created_files"])
+    assert any(path.endswith(".expected.md") for path in result["created_files"])
+    assert not vault.exists()
+
+
+def test_init_sample_vault_refuses_existing_manifest_expected_and_config_conflicts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    vault = tmp_path / "conflict-vault"
+    manifest = vault / ".handwriting-ocr" / "real-samples" / "sample-manifest.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("user manifest\n", encoding="utf-8")
+
+    assert main(["init-sample-vault", "--vault", str(vault)]) == 2
+    assert "ERROR SAMPLE_VAULT_EXISTS: manifest already exists" in capsys.readouterr().err
+
+    manifest.unlink()
+    expected = vault / ".handwriting-ocr" / "real-samples" / "expected" / "2026-05-11_001_zh_meeting_clear.expected.md"
+    expected.parent.mkdir(parents=True)
+    expected.write_text("user expected\n", encoding="utf-8")
+    assert main(["init-sample-vault", "--vault", str(vault), "--date", "2026-05-11"]) == 2
+    assert "expected files already exist" in capsys.readouterr().err
+
+    expected.unlink()
+    config = vault / ".handwriting-ocr" / "config.yaml"
+    config.write_text(
+        f"""
+watch:
+  input_dir: "{vault / 'Inbox' / 'HandwritingImages'}"
+""",
+        encoding="utf-8",
+    )
+    assert main(["init-sample-vault", "--vault", str(vault), "--format", "json"]) == 2
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "blocked"
+    assert result["code"] == "CONFIG_WATCH_INPUT_DIR_CONFLICT"
+
+
+def test_init_sample_vault_force_overwrites_scaffold_without_touching_images(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    vault = tmp_path / "force-vault"
+    image_dir = vault / "Inbox" / "HandwritingImages" / "real-samples"
+    image_dir.mkdir(parents=True)
+    image = image_dir / "kept.jpg"
+    image.write_bytes(b"do not touch")
+    manifest = vault / ".handwriting-ocr" / "real-samples" / "sample-manifest.yaml"
+    expected = vault / ".handwriting-ocr" / "real-samples" / "expected" / "2026-05-11_001_zh_meeting_clear.expected.md"
+    expected.parent.mkdir(parents=True)
+    manifest.write_text("old manifest\n", encoding="utf-8")
+    expected.write_text("old expected\n", encoding="utf-8")
+    config = vault / ".handwriting-ocr" / "config.yaml"
+    config.write_text(
+        f"""
+watch:
+  input_dir: "{vault / 'Inbox' / 'HandwritingImages'}"
+ocr:
+  provider: "tesseract"
+""",
+        encoding="utf-8",
+    )
+
+    assert main(["init-sample-vault", "--vault", str(vault), "--date", "2026-05-11", "--force"]) == 0
+    output = capsys.readouterr().out
+
+    assert image.read_bytes() == b"do not touch"
+    assert "image directory already contains images" in output
+    assert "old manifest" not in manifest.read_text(encoding="utf-8")
+    assert "old expected" not in expected.read_text(encoding="utf-8")
+    import yaml
+
+    updated_config = yaml.safe_load(config.read_text(encoding="utf-8"))
+    assert updated_config["ocr"]["provider"] == "tesseract"
+    assert Path(updated_config["watch"]["input_dir"]) == image_dir
+
+
+def test_init_sample_vault_skips_existing_correct_config(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    vault = tmp_path / "correct-config-vault"
+    image_dir = vault / "Inbox" / "HandwritingImages" / "real-samples"
+    config = vault / ".handwriting-ocr" / "config.yaml"
+    config.parent.mkdir(parents=True)
+    original_config = f"""
+watch:
+  input_dir: "{image_dir}"
+ocr:
+  provider: "mock"
+"""
+    config.write_text(original_config, encoding="utf-8")
+
+    assert main(["init-sample-vault", "--vault", str(vault), "--format", "json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert str(config) in result["skipped_files"]
+    assert str(config) not in result["created_files"]
+    assert config.read_text(encoding="utf-8") == original_config
+
+
+def test_init_sample_vault_allows_config_without_watch_input(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    vault = tmp_path / "no-watch-config-vault"
+    config = vault / ".handwriting-ocr" / "config.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text("ocr:\n  provider: mock\n", encoding="utf-8")
+
+    assert main(["init-sample-vault", "--vault", str(vault)]) == 0
+    assert "sample vault scaffold: READY" in capsys.readouterr().out
+
+
+def test_init_sample_vault_reports_missing_and_invalid_templates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    missing_root = tmp_path / "missing-project"
+    monkeypatch.setattr(sample_vault_init, "_project_root", lambda: missing_root)
+
+    assert main(["init-sample-vault", "--vault", str(tmp_path / "vault")]) == 3
+    assert "ERROR TEMPLATE_MISSING:" in capsys.readouterr().err
+
+    docs = missing_root / "docs"
+    docs.mkdir(parents=True)
+    (docs / "sample-manifest.template.yaml").write_text("- invalid\n", encoding="utf-8")
+    (docs / "sample.expected.md.template").write_text("template\n", encoding="utf-8")
+    assert main(["init-sample-vault", "--vault", str(tmp_path / "vault")]) == 3
+    assert "ERROR TEMPLATE_INVALID:" in capsys.readouterr().err
+
+
+def test_expected_template_helpers_cover_missing_and_last_sections() -> None:
+    sample = {
+        "sample_id": "2026-05-11_001_zh_meeting_clear",
+        "image_file": "2026-05-11_001_zh_meeting_clear.jpg",
+        "language": "zh-cn",
+        "scenario": "meeting",
+        "quality_tags": ["clear"],
+        "expected_character_count": 80,
+        "must_include": ["会议"],
+    }
+    assert _replace_section("no sections", "missing", "x") == "no sections"
+    assert _replace_section("## only", "only", "x") == "## only"
+    assert _replace_section("## tail\nold", "tail", "new") == "## tail\n\nnew\n"
+    rendered = _expected_file_text("body without frontmatter", sample)
+    assert "body without frontmatter" in rendered
+    assert "privacy_checked: false" in rendered
 
 
 def test_validate_samples_cli_rejects_admission_failures(

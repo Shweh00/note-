@@ -145,11 +145,14 @@ handwriting-ocr watch --config ~/ObsidianVault/.handwriting-ocr/config.yaml
 
 需要用真实手写图片复验 OCR 质量时，请按 [真实手写样例集准备指南](docs/real-handwriting-sample-kit.md) 准备脱敏样例。指南包含 18 张最小样例覆盖清单、隐私脱敏要求、命名规则、参考文本格式、放置路径和 api-tester 复验命令。
 
-样例集进入 OCR 复验前先运行准入校验：
+先生成本机测试 vault 骨架，再人工放入脱敏图片和参考文本：
 
 ```bash
+handwriting-ocr init-sample-vault --vault "$HW_SAMPLE_VAULT"
 handwriting-ocr validate-samples --vault "$HW_SAMPLE_VAULT"
 ```
+
+刚初始化后 `validate-samples` 返回失败是预期结果，因为图片、`image_sha256: TODO`、`privacy_checked: false` 和 expected 占位文本仍需人工补齐。`init-sample-vault` 只写目录、manifest、18 个 `.expected.md` 占位文件和样例配置，不写入真实图片、不运行 OCR、不上传图片，也不会把隐私检查标记为通过。
 
 该命令校验 `sample-manifest.yaml`、manifest 登记的 18 张图片、命名规则、18 个 `.expected.md` 文件、`privacy_checked: true`、`image_sha256` 和 `watch.input_dir`。成功退出码为 `0` 并输出 `sample validation: PASS`；发现准入问题时退出码为 `1` 并输出逐条可操作的 `FAIL <CODE>:`。默认准入会拒绝未登记在 manifest 中的额外图片或额外 `.expected.md` 文件。`--format json` 可用于 CI 或 api-tester 自动解析。
 
