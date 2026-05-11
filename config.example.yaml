@@ -26,7 +26,13 @@ ocr:
     engine: "paddle"
     device: "cpu"
     lang: "ch"
-    model_dir: ""
+    # PaddleOCR 3.x explicit local model directories. In no-network mode,
+    # text_detection_model_dir and text_recognition_model_dir are required.
+    text_detection_model_dir: ""
+    text_recognition_model_dir: ""
+    doc_orientation_classify_model_dir: ""
+    doc_unwarping_model_dir: ""
+    textline_orientation_model_dir: ""
     allow_model_download: false
     use_doc_orientation_classify: false
     use_doc_unwarping: false

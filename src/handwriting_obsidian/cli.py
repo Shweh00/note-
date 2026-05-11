@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 from .config import AppConfig, load_config
-from .ocr import create_ocr_engine
+from .ocr import configured_paddle_model_dirs, create_ocr_engine, missing_required_paddle_model_dirs
 from .processor import process_batch, retry_failed, watch
 from .state import ProcessingState
 
@@ -179,8 +179,6 @@ def _check_sqlite(path: Path) -> str | None:
 def _check_ocr(config: AppConfig) -> str | None:
     if config.ocr.mode == "mock" or config.ocr.provider == "mock":
         return None
-    if config.ocr.mode == "offline" and config.ocr.provider == "openai":
-        return "provider=openai cannot be used with ocr.mode=offline"
     if config.ocr.provider == "openai" and not os.environ.get(config.ocr.api_key_env):
         return f"{config.ocr.api_key_env} is not set"
     if config.ocr.provider == "tesseract":
@@ -216,10 +214,12 @@ def _check_tesseract(config: AppConfig) -> str | None:
 
 
 def _check_paddle(config: AppConfig) -> str | None:
-    if (config.ocr.offline_no_network or not config.ocr.paddle.allow_model_download) and not config.ocr.paddle.model_dir:
-        return "PaddleOCR model_dir missing and downloads disabled"
-    if config.ocr.paddle.model_dir and not config.ocr.paddle.model_dir.is_dir():
-        return f"PaddleOCR model_dir not found: {config.ocr.paddle.model_dir}"
+    missing = missing_required_paddle_model_dirs(config.ocr)
+    if missing:
+        return "PaddleOCR local model directories missing and downloads disabled: " + ", ".join(missing)
+    for name, directory in configured_paddle_model_dirs(config.ocr).items():
+        if not directory.is_dir():
+            return f"PaddleOCR {name} not found: {directory}"
     if config.ocr.paddle.device != "cpu":
         return f"device {config.ocr.paddle.device!r} is not supported by doctor in this version; use cpu"
     try:
@@ -258,7 +258,11 @@ ocr:
     engine: "paddle"
     device: "cpu"
     lang: "ch"
-    model_dir: ""
+    text_detection_model_dir: ""
+    text_recognition_model_dir: ""
+    doc_orientation_classify_model_dir: ""
+    doc_unwarping_model_dir: ""
+    textline_orientation_model_dir: ""
     allow_model_download: false
     use_doc_orientation_classify: false
     use_doc_unwarping: false

@@ -27,7 +27,11 @@ class PaddleConfig:
     engine: str = "paddle"
     device: str = "cpu"
     lang: str = ""
-    model_dir: Path | None = None
+    text_detection_model_dir: Path | None = None
+    text_recognition_model_dir: Path | None = None
+    doc_orientation_classify_model_dir: Path | None = None
+    doc_unwarping_model_dir: Path | None = None
+    textline_orientation_model_dir: Path | None = None
     allow_model_download: bool = False
     use_doc_orientation_classify: bool = False
     use_doc_unwarping: bool = False
@@ -305,6 +309,8 @@ def load_config(path: Path) -> AppConfig:
     _validate_choice("index.grouping", index_grouping, {"date", "flat"})
     _validate_choice("index.sort", index_sort, {"desc", "asc"})
     _validate_choice("index.update_mode", index_update_mode, {"managed_block"})
+    if ocr_mode == "offline" and ocr_provider == "openai":
+        raise ValueError("provider=openai cannot be used with ocr.mode=offline")
     date_pattern = str(date_folder_raw.get("pattern", "YYYY/MM/DD"))
     _validate_date_pattern(date_pattern)
 
@@ -312,7 +318,6 @@ def load_config(path: Path) -> AppConfig:
     if not 1 <= settle_seconds <= 300:
         raise ValueError("watch.settle_seconds must be between 1 and 300")
     ocr_language = str(ocr_raw.get("language", ocr_raw.get("languages", "zh-cn,en")))
-    paddle_model_dir = paddle_raw.get("model_dir")
     tessdata_dir = tesseract_raw.get("tessdata_dir")
 
     return AppConfig(
@@ -340,7 +345,15 @@ def load_config(path: Path) -> AppConfig:
                 engine=str(paddle_raw.get("engine", "paddle")),
                 device=str(paddle_raw.get("device", "cpu")),
                 lang=str(paddle_raw.get("lang") or paddle_lang_from_language(ocr_language)),
-                model_dir=_resolve(base, paddle_model_dir) if paddle_model_dir else None,
+                text_detection_model_dir=_resolve_optional(base, paddle_raw.get("text_detection_model_dir")),
+                text_recognition_model_dir=_resolve_optional(base, paddle_raw.get("text_recognition_model_dir")),
+                doc_orientation_classify_model_dir=_resolve_optional(
+                    base, paddle_raw.get("doc_orientation_classify_model_dir")
+                ),
+                doc_unwarping_model_dir=_resolve_optional(base, paddle_raw.get("doc_unwarping_model_dir")),
+                textline_orientation_model_dir=_resolve_optional(
+                    base, paddle_raw.get("textline_orientation_model_dir")
+                ),
                 allow_model_download=bool(paddle_raw.get("allow_model_download", False)),
                 use_doc_orientation_classify=bool(paddle_raw.get("use_doc_orientation_classify", False)),
                 use_doc_unwarping=bool(paddle_raw.get("use_doc_unwarping", False)),
@@ -409,3 +422,9 @@ def _legacy_toml_to_nested(raw: dict[str, Any]) -> dict[str, Any]:
         "archive": {"after_success": "copy", "after_error": "copy"},
         "dedupe": raw.get("dedupe", {"strategy": "content_hash", "on_duplicate": "skip"}),
     }
+
+
+def _resolve_optional(base: Path, value: Any) -> Path | None:
+    if value is None or value == "":
+        return None
+    return _resolve(base, value)

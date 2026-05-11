@@ -83,6 +83,21 @@ archive:
     return config
 
 
+def paddle_model_dirs(root: Path) -> dict[str, Path]:
+    det = root / "det"
+    rec = root / "rec"
+    det.mkdir(parents=True)
+    rec.mkdir(parents=True)
+    return {"text_detection_model_dir": det, "text_recognition_model_dir": rec}
+
+
+def paddle_yaml_fields(dirs: dict[str, Path]) -> str:
+    return (
+        f'    text_detection_model_dir: "{dirs["text_detection_model_dir"]}"\n'
+        f'    text_recognition_model_dir: "{dirs["text_recognition_model_dir"]}"'
+    )
+
+
 def test_batch_mock_ocr_generates_obsidian_markdown_and_sqlite_dedupe(tmp_path: Path) -> None:
     config_path = write_config(tmp_path)
     image = tmp_path / "incoming" / "page one.png"
@@ -595,6 +610,8 @@ def test_config_validation_and_helpers(tmp_path: Path, monkeypatch: pytest.Monke
     assert resolve_note_output_dir(load_config(config_path), tmp_path / "x.png", datetime.now(timezone.utc)) == load_config(config_path).output_dir
 
     offline_openai = write_config(tmp_path / "offline-openai", provider="openai", mode="offline")
+    with pytest.raises(ValueError, match="provider=openai"):
+        load_config(offline_openai)
     assert main(["doctor", "--config", str(offline_openai)]) == 1
 
     offline_tesseract = write_config(tmp_path / "offline-tesseract", provider="tesseract", mode="offline")
@@ -718,10 +735,25 @@ def test_ocr_provider_edges(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     )
     assert tesseract.recognize(image, language="eng").text == "hello"
     assert tesseract.recognize(image, language="eng").language == "eng"
-    with pytest.raises(RuntimeError, match="model_dir"):
+    with pytest.raises(RuntimeError, match="text_detection_model_dir"):
         create_ocr_engine(OcrConfig(mode="offline", provider="paddle"))
     with pytest.raises(ValueError):
         create_ocr_engine(OcrConfig(mode="offline", provider="other"))
+
+
+def test_cli_rejects_offline_openai_before_any_upload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = write_config(tmp_path, provider="openai", mode="offline")
+    image = tmp_path / "incoming" / "private.png"
+    image.write_bytes(b"private handwriting")
+    monkeypatch.setenv("MISSING_OPENAI_KEY", "present")
+
+    def forbidden_urlopen(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("offline OpenAI config must not upload images")
+
+    monkeypatch.setattr("handwriting_obsidian.ocr.urllib.request.urlopen", forbidden_urlopen)
+
+    for command in ("batch", "watch", "retry-failed"):
+        assert main([command, "--config", str(config_path)]) == 1
 
 
 def test_tesseract_success_doctor_failure_and_runtime_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -798,12 +830,30 @@ print("离线识别文本")
 
 
 def test_paddle_provider_fake_success_and_doctor_guards(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    model_dir = tmp_path / "models"
-    model_dir.mkdir()
+    model_dirs = paddle_model_dirs(tmp_path / "models")
     captured: dict[str, object] = {}
 
     class FakePaddleOCR:
-        def __init__(self, **kwargs: object) -> None:
+        def __init__(
+            self,
+            *,
+            lang: str,
+            device: str,
+            use_doc_orientation_classify: bool,
+            use_doc_unwarping: bool,
+            use_textline_orientation: bool,
+            text_detection_model_dir: str,
+            text_recognition_model_dir: str,
+        ) -> None:
+            kwargs = {
+                "lang": lang,
+                "device": device,
+                "use_doc_orientation_classify": use_doc_orientation_classify,
+                "use_doc_unwarping": use_doc_unwarping,
+                "use_textline_orientation": use_textline_orientation,
+                "text_detection_model_dir": text_detection_model_dir,
+                "text_recognition_model_dir": text_recognition_model_dir,
+            }
             captured.update(kwargs)
 
         def predict(self, path: str) -> list[dict[str, object]]:
@@ -819,7 +869,7 @@ def test_paddle_provider_fake_success_and_doctor_guards(tmp_path: Path, monkeypa
             f'''fallback_text: "fallback"
   offline_no_network: true
   paddle:
-    model_dir: "{model_dir}"
+{paddle_yaml_fields(model_dirs)}
     allow_model_download: false''',
         ),
         encoding="utf-8",
@@ -830,6 +880,9 @@ def test_paddle_provider_fake_success_and_doctor_guards(tmp_path: Path, monkeypa
     assert main(["doctor", "--config", str(config_path)]) == 0
     assert main(["batch", "--config", str(config_path)]) == 0
     assert captured["lang"] == "ch"
+    assert "model_dir" not in captured
+    assert captured["text_detection_model_dir"] == str(model_dirs["text_detection_model_dir"])
+    assert captured["text_recognition_model_dir"] == str(model_dirs["text_recognition_model_dir"])
     note = next(load_config(config_path).output_dir.glob("*.md"))
     text = note.read_text(encoding="utf-8")
     assert "ocr_provider: \"paddle\"" in text
@@ -845,21 +898,24 @@ def test_paddle_provider_fake_success_and_doctor_guards(tmp_path: Path, monkeypa
                 mode="offline",
                 provider="paddle",
                 offline_no_network=False,
-                paddle=PaddleConfig(model_dir=model_dir, allow_model_download=True),
+                paddle=PaddleConfig(allow_model_download=True),
             )
         )
 
 
 def test_paddle_error_paths_and_result_parsing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    model_dir = tmp_path / "models"
-    model_dir.mkdir()
+    model_dirs = paddle_model_dirs(tmp_path / "models")
     missing_dir = tmp_path / "missing-models"
     with pytest.raises(RuntimeError, match="does not exist"):
         create_ocr_engine(
             OcrConfig(
                 mode="offline",
                 provider="paddle",
-                paddle=PaddleConfig(model_dir=missing_dir, allow_model_download=False),
+                paddle=PaddleConfig(
+                    text_detection_model_dir=missing_dir,
+                    text_recognition_model_dir=model_dirs["text_recognition_model_dir"],
+                    allow_model_download=False,
+                ),
             )
         )
 
@@ -873,7 +929,11 @@ def test_paddle_error_paths_and_result_parsing(tmp_path: Path, monkeypatch: pyte
             OcrConfig(
                 mode="offline",
                 provider="paddle",
-                paddle=PaddleConfig(model_dir=model_dir, allow_model_download=False),
+                paddle=PaddleConfig(
+                    text_detection_model_dir=model_dirs["text_detection_model_dir"],
+                    text_recognition_model_dir=model_dirs["text_recognition_model_dir"],
+                    allow_model_download=False,
+                ),
             )
         )
 
@@ -889,7 +949,12 @@ def test_paddle_error_paths_and_result_parsing(tmp_path: Path, monkeypatch: pyte
         OcrConfig(
             mode="offline",
             provider="paddle",
-            paddle=PaddleConfig(model_dir=model_dir, allow_model_download=False, lang=""),
+            paddle=PaddleConfig(
+                text_detection_model_dir=model_dirs["text_detection_model_dir"],
+                text_recognition_model_dir=model_dirs["text_recognition_model_dir"],
+                allow_model_download=False,
+                lang="",
+            ),
         )
     )
     assert engine.recognize(tmp_path / "legacy.png", language="en").text == "legacy text"
@@ -907,7 +972,11 @@ def test_paddle_error_paths_and_result_parsing(tmp_path: Path, monkeypatch: pyte
         OcrConfig(
             mode="offline",
             provider="paddle",
-            paddle=PaddleConfig(model_dir=model_dir, allow_model_download=False),
+            paddle=PaddleConfig(
+                text_detection_model_dir=model_dirs["text_detection_model_dir"],
+                text_recognition_model_dir=model_dirs["text_recognition_model_dir"],
+                allow_model_download=False,
+            ),
         )
     )
     with pytest.raises(RuntimeError, match="predict failed"):
@@ -925,7 +994,11 @@ def test_paddle_error_paths_and_result_parsing(tmp_path: Path, monkeypatch: pyte
         OcrConfig(
             mode="offline",
             provider="paddle",
-            paddle=PaddleConfig(model_dir=model_dir, allow_model_download=False),
+            paddle=PaddleConfig(
+                text_detection_model_dir=model_dirs["text_detection_model_dir"],
+                text_recognition_model_dir=model_dirs["text_recognition_model_dir"],
+                allow_model_download=False,
+            ),
         )
     )
     with pytest.raises(RuntimeError, match="empty"):
@@ -978,8 +1051,7 @@ def test_doctor_offline_edge_guards(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     )
     assert main(["doctor", "--config", str(bad_list_config)]) == 1
 
-    model_dir = tmp_path / "models"
-    model_dir.mkdir()
+    model_dirs = paddle_model_dirs(tmp_path / "models")
     gpu_config = write_config(tmp_path / "gpu", provider="paddle", mode="offline")
     gpu_config.write_text(
         gpu_config.read_text(encoding="utf-8").replace(
@@ -987,7 +1059,7 @@ def test_doctor_offline_edge_guards(tmp_path: Path, monkeypatch: pytest.MonkeyPa
             f'''fallback_text: "fallback"
   paddle:
     device: "gpu:0"
-    model_dir: "{model_dir}"''',
+{paddle_yaml_fields(model_dirs)}''',
         ),
         encoding="utf-8",
     )
@@ -997,7 +1069,7 @@ def test_doctor_offline_edge_guards(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     no_import.write_text(
         no_import.read_text(encoding="utf-8").replace(
             'fallback_text: "fallback"',
-            f'fallback_text: "fallback"\n  paddle:\n    model_dir: "{model_dir}"',
+            f'fallback_text: "fallback"\n  paddle:\n{paddle_yaml_fields(model_dirs)}',
         ),
         encoding="utf-8",
     )

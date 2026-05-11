@@ -124,10 +124,15 @@ class PaddleOcrEngine:
     def __init__(self, config: OcrConfig) -> None:
         self.config = config
         self.model = config.model or "PP-OCRv5"
-        if (config.offline_no_network or not config.paddle.allow_model_download) and not config.paddle.model_dir:
-            raise RuntimeError("PaddleOCR model_dir is required when offline_no_network=true or downloads are disabled")
-        if config.paddle.model_dir and not config.paddle.model_dir.is_dir():
-            raise RuntimeError(f"PaddleOCR model_dir does not exist: {config.paddle.model_dir}")
+        missing = missing_required_paddle_model_dirs(config)
+        if missing:
+            raise RuntimeError(
+                "PaddleOCR local model directories are required when offline_no_network=true "
+                f"or downloads are disabled: {', '.join(missing)}"
+            )
+        for name, directory in configured_paddle_model_dirs(config).items():
+            if not directory.is_dir():
+                raise RuntimeError(f"PaddleOCR {name} does not exist: {directory}")
         try:
             module = importlib.import_module("paddleocr")
         except ImportError as exc:
@@ -181,8 +186,8 @@ class PaddleOcrEngine:
             "use_doc_unwarping": self.config.paddle.use_doc_unwarping,
             "use_textline_orientation": self.config.paddle.use_textline_orientation,
         }
-        if self.config.paddle.model_dir:
-            kwargs["model_dir"] = str(self.config.paddle.model_dir)
+        for name, directory in configured_paddle_model_dirs(self.config).items():
+            kwargs[name] = str(directory)
         return kwargs
 
 
@@ -262,6 +267,8 @@ class OpenAiOcrEngine:
 
 
 def create_ocr_engine(config: OcrConfig) -> OcrEngine:
+    if config.mode == "offline" and config.provider == "openai":
+        raise ValueError("provider=openai cannot be used with ocr.mode=offline")
     if config.mode == "mock" or config.provider == "mock":
         return MockOcrEngine(config.fallback_text, config.model or "mock")
     if config.provider == "tesseract":
@@ -279,6 +286,44 @@ def create_ocr_engine(config: OcrConfig) -> OcrEngine:
     if config.provider == "paddle":
         return PaddleOcrEngine(config)
     raise ValueError(f"Unsupported OCR provider: {config.provider}")
+
+
+def required_paddle_model_dir_fields(config: OcrConfig) -> tuple[str, ...]:
+    fields = ["text_detection_model_dir", "text_recognition_model_dir"]
+    if config.paddle.use_doc_orientation_classify:
+        fields.append("doc_orientation_classify_model_dir")
+    if config.paddle.use_doc_unwarping:
+        fields.append("doc_unwarping_model_dir")
+    if config.paddle.use_textline_orientation:
+        fields.append("textline_orientation_model_dir")
+    return tuple(fields)
+
+
+def missing_required_paddle_model_dirs(config: OcrConfig) -> tuple[str, ...]:
+    if not config.offline_no_network and config.paddle.allow_model_download:
+        return ()
+    missing: list[str] = []
+    for field in required_paddle_model_dir_fields(config):
+        if getattr(config.paddle, field) is None:
+            missing.append(field)
+    return tuple(missing)
+
+
+def configured_paddle_model_dirs(config: OcrConfig) -> dict[str, Path]:
+    dirs: dict[str, Path] = {}
+    for field in required_paddle_model_dir_fields(config):
+        value = getattr(config.paddle, field)
+        if isinstance(value, Path):
+            dirs[field] = value
+    for field in (
+        "doc_orientation_classify_model_dir",
+        "doc_unwarping_model_dir",
+        "textline_orientation_model_dir",
+    ):
+        value = getattr(config.paddle, field)
+        if isinstance(value, Path):
+            dirs[field] = value
+    return dirs
 
 
 def _image_data_url(image_path: Path) -> str:

@@ -38,3 +38,16 @@ fallback_text = "TODO: replace with OCR text"
 # provider = "tesseract"
 # command = "tesseract"
 # languages = "eng+chi_sim"
+
+# Optional PaddleOCR 3.x local provider. In no-network mode, use explicit model
+# directories; at minimum configure detection and recognition.
+# provider = "paddle"
+# mode = "offline"
+# offline_no_network = true
+#
+# [ocr.paddle]
+# device = "cpu"
+# lang = "ch"
+# text_detection_model_dir = "/path/to/local/paddle/text_detection"
+# text_recognition_model_dir = "/path/to/local/paddle/text_recognition"
+# allow_model_download = false

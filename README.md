@@ -85,7 +85,7 @@ ocr:
 pip install -e ".[offline-paddle]"
 ```
 
-隐私边界：PaddleOCR 推理在本机执行，但如果模型未预置，PaddleOCR 可能尝试下载模型。默认 `offline_no_network: true` 且 `allow_model_download: false`，因此必须配置已存在的本地 `model_dir`，否则 `doctor` 会失败，运行期也不会静默触发下载。
+隐私边界：PaddleOCR 推理在本机执行，但如果模型未预置，PaddleOCR 可能尝试下载模型。默认 `offline_no_network: true` 且 `allow_model_download: false`，因此必须配置已存在的 PaddleOCR 3.x 显式本地模型目录，至少包括 `text_detection_model_dir` 和 `text_recognition_model_dir`；启用方向分类、文档矫正或文本行方向模块时，还必须配置对应目录。否则 `doctor` 会失败，运行期也不会静默触发下载。
 
 ```yaml
 ocr:
@@ -97,7 +97,11 @@ ocr:
     engine: "paddle"
     device: "cpu"
     lang: "ch"
-    model_dir: "/path/to/local/paddle/models"
+    text_detection_model_dir: "/path/to/local/paddle/text_detection"
+    text_recognition_model_dir: "/path/to/local/paddle/text_recognition"
+    doc_orientation_classify_model_dir: ""
+    doc_unwarping_model_dir: ""
+    textline_orientation_model_dir: ""
     allow_model_download: false
     use_doc_orientation_classify: false
     use_doc_unwarping: false
@@ -254,7 +258,7 @@ handwriting-ocr batch --config ~/ObsidianVault/.handwriting-ocr/config.yaml
 
 - 目录不可写：运行 `handwriting-ocr doctor --config ...`，它会检查输出、归档、错误目录。
 - Tesseract 缺语言包：`doctor` 会提示缺少 `chi_sim`、`eng` 等 traineddata。安装对应系统包，或调整 `ocr.tesseract.lang`。
-- PaddleOCR 提示 model_dir 缺失：默认禁用模型下载。请先在有网络环境中准备本地模型目录，再配置 `ocr.paddle.model_dir`；或者明确把 `allow_model_download` 改为 `true` 并接受首次运行可能联网。
+- PaddleOCR 提示本地模型目录缺失：默认禁用模型下载。请先在有网络环境中准备本地模型目录，再配置 `ocr.paddle.text_detection_model_dir` 和 `ocr.paddle.text_recognition_model_dir`；启用可选模块时一并配置对应目录。或者明确把 `allow_model_download` 改为 `true` 并接受首次运行可能联网。
 - 离线模式误配 OpenAI：`ocr.mode: "offline"` 不能搭配 `provider: "openai"`；改为 `mode: "online"` 或换成本机 provider。
 - 重复图片没有生成新笔记：工具按内容 SHA-256 去重，已成功处理的相同内容会记录为 `duplicate`，默认移动到 `processed/`，避免 `batch` 或 `watch` 反复计数。需要保留在输入目录时可把 `dedupe.on_duplicate` 改为 `keep`；此模式只会为同一 `source_path + source_hash` 写入第一条 duplicate 记录，后续轮询不会继续增加 duplicate 计数。
 - OCR 失败：查看 `status` 最近失败，然后修复配置或凭据，运行 `retry-failed`。
