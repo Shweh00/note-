@@ -3,15 +3,19 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 import json
+import os
+import subprocess
+import sys
+import types
 import urllib.error
 
 import pytest
 
 from handwriting_obsidian.cli import main
-from handwriting_obsidian.config import OcrConfig, _load_simple_yaml, _parse_scalar, load_config
+from handwriting_obsidian.config import OcrConfig, PaddleConfig, TesseractConfig, _load_simple_yaml, _parse_scalar, load_config
 from handwriting_obsidian.index import update_index
 from handwriting_obsidian.markdown import build_note_path, render_date_folder, resolve_note_date, resolve_note_output_dir, slugify
-from handwriting_obsidian.ocr import MockOcrEngine, OcrResult, create_ocr_engine
+from handwriting_obsidian.ocr import MockOcrEngine, OcrResult, create_ocr_engine, _extract_paddle_texts, _extract_response_text
 from handwriting_obsidian.processor import (
     archive_image,
     discover_images,
@@ -590,6 +594,14 @@ def test_config_validation_and_helpers(tmp_path: Path, monkeypatch: pytest.Monke
     assert render_date_folder("YYYY_MM_DD", datetime(2026, 5, 11, tzinfo=timezone.utc)) == Path("2026_05_11")
     assert resolve_note_output_dir(load_config(config_path), tmp_path / "x.png", datetime.now(timezone.utc)) == load_config(config_path).output_dir
 
+    offline_openai = write_config(tmp_path / "offline-openai", provider="openai", mode="offline")
+    assert main(["doctor", "--config", str(offline_openai)]) == 1
+
+    offline_tesseract = write_config(tmp_path / "offline-tesseract", provider="tesseract", mode="offline")
+    offline_loaded = load_config(offline_tesseract)
+    assert offline_loaded.ocr.tesseract.lang == "chi_sim+eng"
+    assert offline_loaded.ocr.paddle.lang == "ch"
+
 
 def test_config_toml_fallback_simple_yaml_and_validation(tmp_path: Path) -> None:
     toml = tmp_path / "config.toml"
@@ -688,18 +700,309 @@ def test_ocr_provider_edges(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
         online.recognize(image, language="eng")
 
     class Completed:
+        returncode = 0
         stdout = "hello"
+        stderr = ""
 
     def fake_run(*_args: object, **_kwargs: object) -> Completed:
         return Completed()
 
     monkeypatch.setattr("handwriting_obsidian.ocr.subprocess.run", fake_run)
-    tesseract = create_ocr_engine(OcrConfig(mode="offline", provider="tesseract", command="tesseract"))
+    tesseract = create_ocr_engine(
+        OcrConfig(
+            mode="offline",
+            provider="tesseract",
+            command="tesseract",
+            tesseract=TesseractConfig(lang="eng", psm=7, oem=1),
+        )
+    )
     assert tesseract.recognize(image, language="eng").text == "hello"
-    with pytest.raises(RuntimeError, match="Paddle"):
+    assert tesseract.recognize(image, language="eng").language == "eng"
+    with pytest.raises(RuntimeError, match="model_dir"):
         create_ocr_engine(OcrConfig(mode="offline", provider="paddle"))
     with pytest.raises(ValueError):
         create_ocr_engine(OcrConfig(mode="offline", provider="other"))
+
+
+def test_tesseract_success_doctor_failure_and_runtime_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = tmp_path / "tesseract"
+    fake.write_text(
+        """#!/usr/bin/env python3
+import sys
+if "--list-langs" in sys.argv:
+    print("List of available languages (2):")
+    print("chi_sim")
+    print("eng")
+    raise SystemExit(0)
+assert "-l" in sys.argv and "chi_sim+eng" in sys.argv
+assert "--psm" in sys.argv and "--oem" in sys.argv
+print("离线识别文本")
+""",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ.get('PATH', '')}")
+    config_path = write_config(tmp_path / "ok", provider="tesseract", mode="offline")
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace('fallback_text: "fallback"', f'fallback_text: "fallback"\n  command: "{fake}"'),
+        encoding="utf-8",
+    )
+    image = tmp_path / "ok" / "incoming" / "page.png"
+    image.write_bytes(b"image")
+
+    assert main(["doctor", "--config", str(config_path)]) == 0
+    assert main(["batch", "--config", str(config_path)]) == 0
+    note = next(load_config(config_path).output_dir.glob("*.md"))
+    text = note.read_text(encoding="utf-8")
+    assert "ocr_provider: \"tesseract\"" in text
+    assert "离线识别文本" in text
+
+    missing_lang = tmp_path / "missing-lang"
+    missing_lang.write_text(
+        "#!/usr/bin/env python3\nimport sys\nprint('List of available languages (1):')\nprint('eng')\n",
+        encoding="utf-8",
+    )
+    missing_lang.chmod(0o755)
+    bad_config = write_config(tmp_path / "bad-lang", provider="tesseract", mode="offline")
+    bad_config.write_text(
+        bad_config.read_text(encoding="utf-8").replace('fallback_text: "fallback"', f'fallback_text: "fallback"\n  command: "{missing_lang}"'),
+        encoding="utf-8",
+    )
+    assert main(["doctor", "--config", str(bad_config)]) == 1
+
+    class Failed:
+        returncode = 2
+        stdout = ""
+        stderr = "language data missing"
+
+    monkeypatch.setattr("handwriting_obsidian.ocr.subprocess.run", lambda *_args, **_kwargs: Failed())
+    engine = create_ocr_engine(OcrConfig(mode="offline", provider="tesseract", tesseract=TesseractConfig(lang="eng")))
+    with pytest.raises(RuntimeError, match="language data missing"):
+        engine.recognize(tmp_path / "x.png", language="eng")
+
+    class Empty:
+        returncode = 0
+        stdout = "  "
+        stderr = ""
+
+    monkeypatch.setattr("handwriting_obsidian.ocr.subprocess.run", lambda *_args, **_kwargs: Empty())
+    with pytest.raises(RuntimeError, match="empty"):
+        engine.recognize(tmp_path / "x.png", language="eng")
+
+    def timeout(*_args: object, **_kwargs: object) -> object:
+        raise subprocess.TimeoutExpired("tesseract", 1)
+
+    monkeypatch.setattr("handwriting_obsidian.ocr.subprocess.run", timeout)
+    with pytest.raises(RuntimeError, match="timed out"):
+        engine.recognize(tmp_path / "x.png", language="eng")
+
+
+def test_paddle_provider_fake_success_and_doctor_guards(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    captured: dict[str, object] = {}
+
+    class FakePaddleOCR:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+        def predict(self, path: str) -> list[dict[str, object]]:
+            assert path.endswith("page.png")
+            return [{"rec_texts": ["高置信", "低置信"], "rec_scores": [0.95, 0.5]}]
+
+    fake_module = types.SimpleNamespace(PaddleOCR=FakePaddleOCR)
+    monkeypatch.setitem(sys.modules, "paddleocr", fake_module)
+    config_path = write_config(tmp_path / "paddle", provider="paddle", mode="offline")
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            'fallback_text: "fallback"',
+            f'''fallback_text: "fallback"
+  offline_no_network: true
+  paddle:
+    model_dir: "{model_dir}"
+    allow_model_download: false''',
+        ),
+        encoding="utf-8",
+    )
+    image = tmp_path / "paddle" / "incoming" / "page.png"
+    image.write_bytes(b"image")
+
+    assert main(["doctor", "--config", str(config_path)]) == 0
+    assert main(["batch", "--config", str(config_path)]) == 0
+    assert captured["lang"] == "ch"
+    note = next(load_config(config_path).output_dir.glob("*.md"))
+    text = note.read_text(encoding="utf-8")
+    assert "ocr_provider: \"paddle\"" in text
+    assert "低置信 [?]" in text
+
+    no_model = write_config(tmp_path / "paddle-no-model", provider="paddle", mode="offline")
+    assert main(["doctor", "--config", str(no_model)]) == 1
+
+    monkeypatch.delitem(sys.modules, "paddleocr")
+    with pytest.raises(RuntimeError, match="not installed"):
+        create_ocr_engine(
+            OcrConfig(
+                mode="offline",
+                provider="paddle",
+                offline_no_network=False,
+                paddle=PaddleConfig(model_dir=model_dir, allow_model_download=True),
+            )
+        )
+
+
+def test_paddle_error_paths_and_result_parsing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    missing_dir = tmp_path / "missing-models"
+    with pytest.raises(RuntimeError, match="does not exist"):
+        create_ocr_engine(
+            OcrConfig(
+                mode="offline",
+                provider="paddle",
+                paddle=PaddleConfig(model_dir=missing_dir, allow_model_download=False),
+            )
+        )
+
+    class InitFails:
+        def __init__(self, **_kwargs: object) -> None:
+            raise RuntimeError("init failed")
+
+    monkeypatch.setitem(sys.modules, "paddleocr", types.SimpleNamespace(PaddleOCR=InitFails))
+    with pytest.raises(RuntimeError, match="initialization failed"):
+        create_ocr_engine(
+            OcrConfig(
+                mode="offline",
+                provider="paddle",
+                paddle=PaddleConfig(model_dir=model_dir, allow_model_download=False),
+            )
+        )
+
+    class OcrOnly:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def ocr(self, _path: str) -> list[list[list[object]]]:
+            return [[[None, ("legacy text", 0.9)]]]
+
+    monkeypatch.setitem(sys.modules, "paddleocr", types.SimpleNamespace(PaddleOCR=OcrOnly))
+    engine = create_ocr_engine(
+        OcrConfig(
+            mode="offline",
+            provider="paddle",
+            paddle=PaddleConfig(model_dir=model_dir, allow_model_download=False, lang=""),
+        )
+    )
+    assert engine.recognize(tmp_path / "legacy.png", language="en").text == "legacy text"
+    assert engine.recognize(tmp_path / "legacy.png", language="en").language == "en"
+
+    class PredictFails:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def predict(self, _path: str) -> object:
+            raise RuntimeError("predict failed")
+
+    monkeypatch.setitem(sys.modules, "paddleocr", types.SimpleNamespace(PaddleOCR=PredictFails))
+    engine = create_ocr_engine(
+        OcrConfig(
+            mode="offline",
+            provider="paddle",
+            paddle=PaddleConfig(model_dir=model_dir, allow_model_download=False),
+        )
+    )
+    with pytest.raises(RuntimeError, match="predict failed"):
+        engine.recognize(tmp_path / "x.png", language="zh-cn")
+
+    class EmptyPredict:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def predict(self, _path: str) -> list[dict[str, object]]:
+            return [{"rec_texts": ["  "], "rec_scores": ["bad"]}]
+
+    monkeypatch.setitem(sys.modules, "paddleocr", types.SimpleNamespace(PaddleOCR=EmptyPredict))
+    engine = create_ocr_engine(
+        OcrConfig(
+            mode="offline",
+            provider="paddle",
+            paddle=PaddleConfig(model_dir=model_dir, allow_model_download=False),
+        )
+    )
+    with pytest.raises(RuntimeError, match="empty"):
+        engine.recognize(tmp_path / "x.png", language="zh-cn")
+
+    class JsonResult:
+        json = {"rec_texts": ["json text"], "rec_scores": [0.91]}
+
+    class ResResult:
+        res = {"rec_texts": ["res text"], "rec_scores": [None]}
+
+    class DictResult:
+        def to_dict(self) -> dict[str, object]:
+            return {"rec_texts": ["dict text"], "rec_scores": [0.7]}
+
+    assert _extract_paddle_texts((JsonResult(), ResResult(), DictResult(), object()))[0] == [
+        "json text",
+        "res text",
+        "dict text",
+    ]
+    assert _extract_response_text({"output": [{"content": [{"type": "text", "text": "nested"}]}]}) == "nested"
+    assert _extract_response_text([]) == ""
+
+
+def test_doctor_offline_edge_guards(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    missing_command = write_config(tmp_path / "missing-command", provider="tesseract", mode="offline")
+    missing_command.write_text(
+        missing_command.read_text(encoding="utf-8").replace('fallback_text: "fallback"', 'fallback_text: "fallback"\n  command: "missing-tesseract"'),
+        encoding="utf-8",
+    )
+    assert main(["doctor", "--config", str(missing_command)]) == 1
+
+    tessdata_config = write_config(tmp_path / "bad-tessdata", provider="tesseract", mode="offline")
+    tessdata_config.write_text(
+        tessdata_config.read_text(encoding="utf-8").replace(
+            'fallback_text: "fallback"',
+            f'fallback_text: "fallback"\n  tesseract:\n    tessdata_dir: "{tmp_path / "missing-tessdata"}"',
+        ),
+        encoding="utf-8",
+    )
+    assert main(["doctor", "--config", str(tessdata_config)]) == 1
+
+    list_fails = tmp_path / "list-fails"
+    list_fails.write_text("#!/usr/bin/env python3\nimport sys\nprint('bad', file=sys.stderr)\nraise SystemExit(2)\n", encoding="utf-8")
+    list_fails.chmod(0o755)
+    bad_list_config = write_config(tmp_path / "bad-list", provider="tesseract", mode="offline")
+    bad_list_config.write_text(
+        bad_list_config.read_text(encoding="utf-8").replace('fallback_text: "fallback"', f'fallback_text: "fallback"\n  command: "{list_fails}"'),
+        encoding="utf-8",
+    )
+    assert main(["doctor", "--config", str(bad_list_config)]) == 1
+
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    gpu_config = write_config(tmp_path / "gpu", provider="paddle", mode="offline")
+    gpu_config.write_text(
+        gpu_config.read_text(encoding="utf-8").replace(
+            'fallback_text: "fallback"',
+            f'''fallback_text: "fallback"
+  paddle:
+    device: "gpu:0"
+    model_dir: "{model_dir}"''',
+        ),
+        encoding="utf-8",
+    )
+    assert main(["doctor", "--config", str(gpu_config)]) == 1
+
+    no_import = write_config(tmp_path / "paddle-import", provider="paddle", mode="offline")
+    no_import.write_text(
+        no_import.read_text(encoding="utf-8").replace(
+            'fallback_text: "fallback"',
+            f'fallback_text: "fallback"\n  paddle:\n    model_dir: "{model_dir}"',
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.delitem(sys.modules, "paddleocr", raising=False)
+    assert main(["doctor", "--config", str(no_import)]) == 1
 
 
 def test_processor_edges_and_archive_modes(tmp_path: Path) -> None:

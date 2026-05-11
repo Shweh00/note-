@@ -23,6 +23,26 @@ class WatchConfig:
 
 
 @dataclass(frozen=True)
+class PaddleConfig:
+    engine: str = "paddle"
+    device: str = "cpu"
+    lang: str = ""
+    model_dir: Path | None = None
+    allow_model_download: bool = False
+    use_doc_orientation_classify: bool = False
+    use_doc_unwarping: bool = False
+    use_textline_orientation: bool = False
+
+
+@dataclass(frozen=True)
+class TesseractConfig:
+    lang: str = ""
+    psm: int = 6
+    oem: int = 1
+    tessdata_dir: Path | None = None
+
+
+@dataclass(frozen=True)
 class OcrConfig:
     mode: str = "mock"
     provider: str = "mock"
@@ -33,6 +53,9 @@ class OcrConfig:
     api_key_env: str = "OPENAI_API_KEY"
     fallback_text: str = "TODO: replace with OCR text"
     command: str = "tesseract"
+    offline_no_network: bool = True
+    paddle: PaddleConfig = field(default_factory=PaddleConfig)
+    tesseract: TesseractConfig = field(default_factory=TesseractConfig)
 
 
 @dataclass(frozen=True)
@@ -197,6 +220,38 @@ def _validate_date_pattern(pattern: str) -> None:
         raise ValueError("markdown.date_folder.pattern supports only YYYY, MM, DD, '/', '-' and '_'")
 
 
+def tesseract_lang_from_language(language: str) -> str:
+    mapped: list[str] = []
+    aliases = {
+        "zh-cn": "chi_sim",
+        "zh": "chi_sim",
+        "cn": "chi_sim",
+        "chinese": "chi_sim",
+        "zh-tw": "chi_tra",
+        "zh-hant": "chi_tra",
+        "zh_tra": "chi_tra",
+        "en": "eng",
+        "eng": "eng",
+    }
+    for part in re.split(r"[,;+ ]+", language):
+        key = part.strip().lower()
+        if not key:
+            continue
+        value = aliases.get(key, key)
+        if value not in mapped:
+            mapped.append(value)
+    return "+".join(mapped) or "eng"
+
+
+def paddle_lang_from_language(language: str) -> str:
+    normalized = {part.strip().lower() for part in re.split(r"[,;+ ]+", language) if part.strip()}
+    if normalized & {"zh-cn", "zh", "cn", "chinese", "zh-tw", "zh-hant"}:
+        return "ch"
+    if normalized & {"en", "eng"}:
+        return "en"
+    return "ch"
+
+
 def load_config(path: Path) -> AppConfig:
     config_path = path.expanduser().resolve()
     raw = _load_raw(config_path)
@@ -214,6 +269,8 @@ def load_config(path: Path) -> AppConfig:
     archive_raw = raw.get("archive", {})
     date_folder_raw = markdown_raw.get("date_folder", {}) if isinstance(markdown_raw, dict) else {}
     template_raw = markdown_raw.get("template", {}) if isinstance(markdown_raw, dict) else {}
+    paddle_raw = ocr_raw.get("paddle", {}) if isinstance(ocr_raw, dict) else {}
+    tesseract_raw = ocr_raw.get("tesseract", {}) if isinstance(ocr_raw, dict) else {}
 
     input_dir = _resolve(base, watch_raw["input_dir"])
     output_dir = _resolve(base, watch_raw["output_dir"])
@@ -237,6 +294,7 @@ def load_config(path: Path) -> AppConfig:
 
     _validate_choice("ocr.mode", ocr_mode, {"online", "offline", "mock"})
     _validate_choice("ocr.provider", ocr_provider, {"openai", "paddle", "mock", "tesseract"})
+    _validate_choice("ocr.paddle.engine", str(paddle_raw.get("engine", "paddle")), {"paddle", "transformers"})
     _validate_choice("archive.after_success", after_success, {"move", "keep", "copy"})
     _validate_choice("archive.after_error", after_error, {"move", "keep", "copy"})
     _validate_choice("dedupe.strategy", dedupe_strategy, {"content_hash", "path_and_mtime"})
@@ -253,6 +311,9 @@ def load_config(path: Path) -> AppConfig:
     settle_seconds = float(watch_raw.get("settle_seconds", 5))
     if not 1 <= settle_seconds <= 300:
         raise ValueError("watch.settle_seconds must be between 1 and 300")
+    ocr_language = str(ocr_raw.get("language", ocr_raw.get("languages", "zh-cn,en")))
+    paddle_model_dir = paddle_raw.get("model_dir")
+    tessdata_dir = tesseract_raw.get("tessdata_dir")
 
     return AppConfig(
         watch=WatchConfig(
@@ -268,12 +329,29 @@ def load_config(path: Path) -> AppConfig:
             mode=ocr_mode,
             provider=ocr_provider,
             model=ocr_raw.get("model"),
-            language=str(ocr_raw.get("language", ocr_raw.get("languages", "zh-cn,en"))),
+            language=ocr_language,
             retry_count=int(ocr_raw.get("retry_count", 3)),
             timeout_seconds=int(ocr_raw.get("timeout_seconds", 120)),
             api_key_env=str(ocr_raw.get("api_key_env", "OPENAI_API_KEY")),
             fallback_text=str(ocr_raw.get("fallback_text", "TODO: replace with OCR text")),
             command=str(ocr_raw.get("command", "tesseract")),
+            offline_no_network=bool(ocr_raw.get("offline_no_network", True)),
+            paddle=PaddleConfig(
+                engine=str(paddle_raw.get("engine", "paddle")),
+                device=str(paddle_raw.get("device", "cpu")),
+                lang=str(paddle_raw.get("lang") or paddle_lang_from_language(ocr_language)),
+                model_dir=_resolve(base, paddle_model_dir) if paddle_model_dir else None,
+                allow_model_download=bool(paddle_raw.get("allow_model_download", False)),
+                use_doc_orientation_classify=bool(paddle_raw.get("use_doc_orientation_classify", False)),
+                use_doc_unwarping=bool(paddle_raw.get("use_doc_unwarping", False)),
+                use_textline_orientation=bool(paddle_raw.get("use_textline_orientation", False)),
+            ),
+            tesseract=TesseractConfig(
+                lang=str(tesseract_raw.get("lang") or tesseract_lang_from_language(ocr_language)),
+                psm=int(tesseract_raw.get("psm", 6)),
+                oem=int(tesseract_raw.get("oem", 1)),
+                tessdata_dir=_resolve(base, tessdata_dir) if tessdata_dir else None,
+            ),
         ),
         markdown=MarkdownConfig(
             filename_template=str(markdown_raw.get("filename_template", "{{date}}-{{source_basename}}.md")),

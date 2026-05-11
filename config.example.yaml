@@ -16,6 +16,28 @@ ocr:
   timeout_seconds: 120
   api_key_env: "OPENAI_API_KEY"
   fallback_text: "TODO: replace with OCR text"
+  command: "tesseract"
+  # true means offline providers must use local models/data only.
+  offline_no_network: true
+  # Optional Chinese-first local provider. Install with:
+  #   pip install -e ".[offline-paddle]"
+  # and pre-download/cache models before running in no-network mode.
+  paddle:
+    engine: "paddle"
+    device: "cpu"
+    lang: "ch"
+    model_dir: ""
+    allow_model_download: false
+    use_doc_orientation_classify: false
+    use_doc_unwarping: false
+    use_textline_orientation: false
+  # Optional low-dependency local provider. Requires the system tesseract
+  # command and traineddata packages such as chi_sim and eng.
+  tesseract:
+    lang: "chi_sim+eng"
+    psm: 6
+    oem: 1
+    tessdata_dir: ""
 
 markdown:
   filename_template: "{{date}}-{{source_basename}}.md"

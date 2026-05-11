@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import importlib
 from pathlib import Path
 from typing import Protocol
 import base64
@@ -13,6 +14,9 @@ import urllib.error
 import urllib.request
 
 from .config import OcrConfig
+
+
+LOW_CONFIDENCE_THRESHOLD = 0.80
 
 
 @dataclass(frozen=True)
@@ -55,26 +59,131 @@ class MockOcrEngine:
 class TesseractOcrEngine:
     name = "tesseract"
 
-    def __init__(self, command: str, model: str | None = None) -> None:
+    def __init__(
+        self,
+        command: str,
+        lang: str,
+        model: str | None = None,
+        timeout_seconds: int = 120,
+        psm: int = 6,
+        oem: int = 1,
+        tessdata_dir: Path | None = None,
+    ) -> None:
         self.command = command
+        self.lang = lang
         self.model = model
+        self.timeout_seconds = timeout_seconds
+        self.psm = psm
+        self.oem = oem
+        self.tessdata_dir = tessdata_dir
 
     def recognize(self, image_path: Path, *, language: str) -> OcrResult:
-        result = subprocess.run(
-            [self.command, str(image_path), "stdout", "-l", language],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        args = [
+            self.command,
+            str(image_path),
+            "stdout",
+            "-l",
+            self.lang,
+            "--psm",
+            str(self.psm),
+            "--oem",
+            str(self.oem),
+        ]
+        if self.tessdata_dir:
+            args.extend(["--tessdata-dir", str(self.tessdata_dir)])
+        try:
+            result = subprocess.run(
+                args,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"Tesseract OCR timed out after {self.timeout_seconds}s for {image_path.name}"
+            ) from exc
+        if result.returncode != 0:
+            raise RuntimeError(f"Tesseract OCR failed: {_tail(result.stderr)}")
         text = result.stdout.strip()
+        if not text:
+            raise RuntimeError("Tesseract OCR returned empty text")
         return OcrResult(
             text=text,
             raw_text=text,
             uncertain_items=(),
             provider=self.name,
             model=self.model,
-            language=language,
+            language=self.lang,
         )
+
+
+class PaddleOcrEngine:
+    name = "paddle"
+
+    def __init__(self, config: OcrConfig) -> None:
+        self.config = config
+        self.model = config.model or "PP-OCRv5"
+        if (config.offline_no_network or not config.paddle.allow_model_download) and not config.paddle.model_dir:
+            raise RuntimeError("PaddleOCR model_dir is required when offline_no_network=true or downloads are disabled")
+        if config.paddle.model_dir and not config.paddle.model_dir.is_dir():
+            raise RuntimeError(f"PaddleOCR model_dir does not exist: {config.paddle.model_dir}")
+        try:
+            module = importlib.import_module("paddleocr")
+        except ImportError as exc:
+            raise RuntimeError(
+                "PaddleOCR is not installed; install optional offline dependencies or use provider=tesseract/mock"
+            ) from exc
+        try:
+            self._ocr = module.PaddleOCR(**self._kwargs())
+        except Exception as exc:
+            raise RuntimeError(f"PaddleOCR initialization failed: {_tail(str(exc))}") from exc
+
+    def recognize(self, image_path: Path, *, language: str) -> OcrResult:
+        try:
+            if hasattr(self._ocr, "predict"):
+                raw_result = self._ocr.predict(str(image_path))
+            else:
+                raw_result = self._ocr.ocr(str(image_path))
+        except Exception as exc:
+            raise RuntimeError(f"PaddleOCR failed for {image_path.name}: {_tail(str(exc))}") from exc
+        texts, scores = _extract_paddle_texts(raw_result)
+        if not texts:
+            raise RuntimeError("PaddleOCR returned empty text")
+        rendered: list[str] = []
+        uncertain: list[str] = []
+        for index, text in enumerate(texts):
+            score = scores[index] if index < len(scores) else None
+            item = text.strip()
+            if not item:
+                continue
+            if score is not None and score < LOW_CONFIDENCE_THRESHOLD:
+                item = f"{item} [?]"
+                uncertain.append(item)
+            rendered.append(item)
+        output = "\n".join(rendered).strip()
+        if not output:
+            raise RuntimeError("PaddleOCR returned empty text")
+        return OcrResult(
+            text=output,
+            raw_text=output,
+            uncertain_items=tuple(uncertain),
+            provider=self.name,
+            model=self.model,
+            language=self.config.paddle.lang or language,
+        )
+
+    def _kwargs(self) -> dict[str, object]:
+        kwargs: dict[str, object] = {
+            "lang": self.config.paddle.lang,
+            "device": self.config.paddle.device,
+            "use_doc_orientation_classify": self.config.paddle.use_doc_orientation_classify,
+            "use_doc_unwarping": self.config.paddle.use_doc_unwarping,
+            "use_textline_orientation": self.config.paddle.use_textline_orientation,
+        }
+        if self.config.paddle.model_dir:
+            kwargs["model_dir"] = str(self.config.paddle.model_dir)
+        return kwargs
 
 
 class OpenAiOcrEngine:
@@ -156,11 +265,19 @@ def create_ocr_engine(config: OcrConfig) -> OcrEngine:
     if config.mode == "mock" or config.provider == "mock":
         return MockOcrEngine(config.fallback_text, config.model or "mock")
     if config.provider == "tesseract":
-        return TesseractOcrEngine(config.command, config.model)
+        return TesseractOcrEngine(
+            config.command,
+            config.tesseract.lang,
+            config.model,
+            config.timeout_seconds,
+            config.tesseract.psm,
+            config.tesseract.oem,
+            config.tesseract.tessdata_dir,
+        )
     if config.provider == "openai":
         return OpenAiOcrEngine(config.api_key_env, config.model, config.timeout_seconds, config.retry_count)
     if config.provider == "paddle":
-        raise RuntimeError("Paddle OCR is not installed in this MVP. Use provider: mock or tesseract.")
+        return PaddleOcrEngine(config)
     raise ValueError(f"Unsupported OCR provider: {config.provider}")
 
 
@@ -190,3 +307,56 @@ def _extract_response_text(payload: object) -> str:
 
 def _uncertain_items(text: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in text.split() if "[?]" in part)
+
+
+def _tail(value: str, *, limit: int = 500) -> str:
+    text = value.strip()
+    return text[-limit:] if text else "no details"
+
+
+def _extract_paddle_texts(raw_result: object) -> tuple[list[str], list[float]]:
+    texts: list[str] = []
+    scores: list[float] = []
+    for item in _flatten_paddle_items(raw_result):
+        data = _paddle_item_to_dict(item)
+        if not data:
+            continue
+        rec_texts = data.get("rec_texts")
+        if isinstance(rec_texts, list):
+            texts.extend(str(text) for text in rec_texts if str(text).strip())
+        rec_scores = data.get("rec_scores")
+        if isinstance(rec_scores, list):
+            for score in rec_scores:
+                try:
+                    scores.append(float(score))
+                except (TypeError, ValueError):
+                    pass
+    if not texts and isinstance(raw_result, list):
+        for line in raw_result:
+            if isinstance(line, list):
+                for candidate in line:
+                    if isinstance(candidate, list) and len(candidate) >= 2 and isinstance(candidate[1], tuple):
+                        texts.append(str(candidate[1][0]))
+                        scores.append(float(candidate[1][1]))
+    return texts, scores
+
+
+def _flatten_paddle_items(value: object) -> list[object]:
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [value]
+
+
+def _paddle_item_to_dict(item: object) -> dict[str, object] | None:
+    if isinstance(item, dict):
+        return item
+    for attr in ("json", "res"):
+        value = getattr(item, attr, None)
+        if isinstance(value, dict):
+            return value
+    to_dict = getattr(item, "to_dict", None)
+    if callable(to_dict):
+        value = to_dict()
+        if isinstance(value, dict):
+            return value
+    return None

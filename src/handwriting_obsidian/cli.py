@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from argparse import ArgumentParser
 from pathlib import Path
+import importlib
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 
 from .config import AppConfig, load_config
@@ -177,10 +179,57 @@ def _check_sqlite(path: Path) -> str | None:
 def _check_ocr(config: AppConfig) -> str | None:
     if config.ocr.mode == "mock" or config.ocr.provider == "mock":
         return None
+    if config.ocr.mode == "offline" and config.ocr.provider == "openai":
+        return "provider=openai cannot be used with ocr.mode=offline"
     if config.ocr.provider == "openai" and not os.environ.get(config.ocr.api_key_env):
         return f"{config.ocr.api_key_env} is not set"
-    if config.ocr.provider == "tesseract" and not shutil.which(config.ocr.command):  # pragma: no cover
+    if config.ocr.provider == "tesseract":
+        return _check_tesseract(config)
+    if config.ocr.provider == "paddle":
+        return _check_paddle(config)
+    return None
+
+
+def _check_tesseract(config: AppConfig) -> str | None:
+    if config.ocr.tesseract.tessdata_dir and not config.ocr.tesseract.tessdata_dir.is_dir():
+        return f"tessdata_dir not found: {config.ocr.tesseract.tessdata_dir}"
+    if not shutil.which(config.ocr.command):
         return f"{config.ocr.command} not found"
+    try:
+        result = subprocess.run(
+            [config.ocr.command, "--list-langs"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"cannot list Tesseract languages: {exc}"
+    if result.returncode != 0:
+        return f"cannot list Tesseract languages: {result.stderr.strip() or result.stdout.strip()}"
+    available = {line.strip() for line in result.stdout.splitlines() if line.strip() and not line.startswith("List of")}
+    required = set(config.ocr.tesseract.lang.split("+"))
+    missing = sorted(required - available)
+    if missing:
+        return f"missing Tesseract language data: {', '.join(missing)}"
+    return None
+
+
+def _check_paddle(config: AppConfig) -> str | None:
+    if (config.ocr.offline_no_network or not config.ocr.paddle.allow_model_download) and not config.ocr.paddle.model_dir:
+        return "PaddleOCR model_dir missing and downloads disabled"
+    if config.ocr.paddle.model_dir and not config.ocr.paddle.model_dir.is_dir():
+        return f"PaddleOCR model_dir not found: {config.ocr.paddle.model_dir}"
+    if config.ocr.paddle.device != "cpu":
+        return f"device {config.ocr.paddle.device!r} is not supported by doctor in this version; use cpu"
+    try:
+        importlib.import_module("paddleocr")
+    except ImportError:
+        return "PaddleOCR is not installed"
+    try:
+        create_ocr_engine(config.ocr)
+    except RuntimeError as exc:
+        return str(exc)
     return None
 
 
@@ -203,6 +252,22 @@ ocr:
   timeout_seconds: 120
   api_key_env: "OPENAI_API_KEY"
   fallback_text: "TODO: replace with OCR text"
+  command: "tesseract"
+  offline_no_network: true
+  paddle:
+    engine: "paddle"
+    device: "cpu"
+    lang: "ch"
+    model_dir: ""
+    allow_model_download: false
+    use_doc_orientation_classify: false
+    use_doc_unwarping: false
+    use_textline_orientation: false
+  tesseract:
+    lang: "chi_sim+eng"
+    psm: 6
+    oem: 1
+    tessdata_dir: ""
 
 markdown:
   filename_template: "{{{{date}}}}-{{{{source_basename}}}}.md"
