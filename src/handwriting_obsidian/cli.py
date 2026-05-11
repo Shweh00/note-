@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from argparse import ArgumentParser
+import json
 from pathlib import Path
 import importlib
 import os
@@ -38,12 +39,19 @@ def build_parser() -> ArgumentParser:
         "validate-samples",
         help="Validate a real handwriting sample vault and sample-manifest.yaml before OCR acceptance.",
     )
-    validate_parser.add_argument("--config", default="config.yaml", help="Path to YAML/TOML config.")
+    validate_parser.add_argument("--vault", default=".", help="Obsidian vault root. Defaults to the current directory.")
+    validate_parser.add_argument("--config", default=None, help="Compatibility shortcut; infers --vault from this config path.")
     validate_parser.add_argument(
         "--manifest",
         default=None,
-        help="Path to sample-manifest.yaml. Defaults to <config-dir>/real-samples/sample-manifest.yaml.",
+        help="Path to sample-manifest.yaml. Defaults to <vault>/.handwriting-ocr/real-samples/sample-manifest.yaml.",
     )
+    validate_parser.add_argument("--image-dir", default=None, help="Path to the real sample image directory.")
+    validate_parser.add_argument("--expected-dir", default=None, help="Path to the expected reference text directory.")
+    validate_parser.add_argument("--min-count", type=int, default=None, help="Minimum valid sample count.")
+    validate_parser.add_argument("--format", choices=("text", "json"), default="text", help="Output format.")
+    validate_parser.add_argument("--strict", action="store_true", help="Treat warnings as failures.")
+    validate_parser.add_argument("--no-hash", action="store_true", help="Skip sha256 recomputation for local preflight only.")
 
     init_config_parser = subparsers.add_parser("init-config", help="Compatibility alias for creating config.yaml.")
     init_config_parser.add_argument("--output", default="config.yaml")
@@ -113,21 +121,26 @@ def run_doctor(config_path: str) -> int:
     return 1 if failed else 0
 
 
-def run_validate_samples(config_path: str, manifest_path: str | None) -> int:
-    config_file = Path(config_path).expanduser().resolve()
-    config = load_config(config_file)
-    manifest = Path(manifest_path).expanduser().resolve() if manifest_path else config_file.parent / "real-samples" / "sample-manifest.yaml"
-    result = validate_sample_vault(config, manifest)
-    print(f"manifest: {result.manifest_path}")
-    for warning in result.warnings:
-        print(f"warning: {warning}")
-    if result.ok:
-        print("sample validation: OK")
-        return 0
-    print("sample validation: FAIL")
-    for error in result.errors:
-        print(f"error: {error}")
-    return 2
+def run_validate_samples(args: object) -> int:
+    config_path = getattr(args, "config", None)
+    if config_path:
+        vault = Path(config_path).expanduser().resolve().parent.parent
+    else:
+        vault = Path(getattr(args, "vault")).expanduser().resolve()
+    result = validate_sample_vault(
+        vault,
+        manifest_path=Path(args.manifest) if args.manifest else None,
+        image_dir=Path(args.image_dir) if args.image_dir else None,
+        expected_dir=Path(args.expected_dir) if args.expected_dir else None,
+        min_count=args.min_count,
+        no_hash=args.no_hash,
+    )
+    failed = bool(result.failures) or (args.strict and bool(result.warnings))
+    if args.format == "json":
+        print(json.dumps(_sample_validation_json(result, failed), ensure_ascii=False, indent=2))
+    else:
+        _print_sample_validation_text(result, failed)
+    return 1 if failed else 0
 
 
 def init_vault(vault: str, force: bool) -> int:
@@ -170,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "doctor":
             return run_doctor(args.config)
         if args.command == "validate-samples":
-            return run_validate_samples(args.config, args.manifest)
+            return run_validate_samples(args)
         if args.command == "init":
             return init_vault(args.vault, args.force)
         if args.command == "init-config":
@@ -186,6 +199,53 @@ def _summary(results: list[object]) -> str:
     duplicate = sum(1 for result in results if getattr(result, "status") == "duplicate")
     failed = sum(1 for result in results if getattr(result, "status") == "failed")
     return f"done: {success} processed, {duplicate} duplicate, {failed} failed"
+
+
+def _print_sample_validation_text(result: object, failed: bool) -> None:
+    print(f"sample validation: {'FAIL' if failed else 'PASS'}")
+    print(f"manifest: {result.manifest_path}")
+    print(f"image_dir: {result.image_dir}")
+    print(f"expected_dir: {result.expected_dir}")
+    print(f"samples: {result.valid_samples} valid, {len(result.failures)} failed, {len(result.warnings)} warnings")
+    print(f"privacy declarations: {'passed' if not any(issue.code in {'SAMPLE_PRIVACY_NOT_CHECKED', 'DATASET_PRIVACY_LEVEL_INVALID'} for issue in result.failures) else 'failed'}")
+    print(f"hashes: {'not recomputed' if result.no_hash else ('verified' if not any(issue.code in {'SAMPLE_HASH_MISSING', 'SAMPLE_HASH_MISMATCH'} for issue in result.failures) else 'failed')}")
+    for issue in result.issues:
+        print(f"{issue.level.upper()} {issue.code}: {issue.message}")
+    if not failed:
+        config_path = result.manifest_path.parents[1] / "config.yaml"
+        print("next:")
+        print(f'  handwriting-ocr doctor --config "{config_path}"')
+        print(f'  handwriting-ocr batch --config "{config_path}"')
+        print(f'  handwriting-ocr status --config "{config_path}"')
+
+
+def _sample_validation_json(result: object, failed: bool) -> dict[str, object]:
+    return {
+        "status": "fail" if failed else "pass",
+        "manifest": str(result.manifest_path),
+        "image_dir": str(result.image_dir),
+        "expected_dir": str(result.expected_dir),
+        "summary": {
+            "valid_samples": result.valid_samples,
+            "failed_samples": len(result.failures),
+            "warnings": len(result.warnings),
+            "hashes_verified": not result.no_hash and not any(
+                issue.code in {"SAMPLE_HASH_MISSING", "SAMPLE_HASH_MISMATCH"} for issue in result.failures
+            ),
+            "privacy_declarations_passed": not any(
+                issue.code in {"SAMPLE_PRIVACY_NOT_CHECKED", "DATASET_PRIVACY_LEVEL_INVALID"} for issue in result.failures
+            ),
+        },
+        "issues": [
+            {
+                "level": issue.level,
+                "code": issue.code,
+                **({"sample_id": issue.sample_id} if issue.sample_id else {}),
+                "message": issue.message,
+            }
+            for issue in result.issues
+        ],
+    }
 
 
 def _check_dir(path: Path, *, writable: bool) -> str | None:

@@ -1275,18 +1275,41 @@ state:
         (image_dir / image_file).write_bytes(image_bytes)
         digest = sha256(image_bytes).hexdigest()
         expected_file = f"expected/{sample_id}.expected.md"
+        manifest_language = {
+            "zh": "zh-cn",
+            "en": "en",
+            "mixed": "zh-cn,en",
+            "num": "numbers",
+        }[lang]
         (expected_dir / f"{sample_id}.expected.md").write_text(
             f"""---
 sample_id: "{sample_id}"
 image_file: "{image_file}"
-language: "{lang}"
+language: "{manifest_language}"
 scenario: "{scenario}"
 quality_tags: ["{quality}"]
 privacy_checked: true
 ---
 
-expected_text:
-  sample {number} redacted text
+## expected_text
+
+sample {number} redacted text
+
+## must_include
+
+- sample
+
+## acceptable_variants
+
+- none
+
+## ignore_regions
+
+- none
+
+## notes_for_reviewer
+
+- test fixture
 """,
             encoding="utf-8",
         )
@@ -1295,7 +1318,7 @@ expected_text:
     image_file: "{image_file}"
     image_sha256: "{digest}"
     expected_file: "{expected_file}"
-    language: "{lang}"
+    language: "{manifest_language}"
     scenario: "{scenario}"
     quality_tags: ["{quality}"]
     expected_character_count: 20
@@ -1333,11 +1356,13 @@ def test_validate_samples_cli_accepts_complete_real_sample_vault(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     config_path, manifest_path = write_sample_vault(tmp_path)
+    vault = tmp_path / "sample-vault"
 
+    assert main(["validate-samples", "--vault", str(vault)]) == 0
     assert main(["validate-samples", "--config", str(config_path)]) == 0
     assert main(["validate-samples", "--config", str(config_path), "--manifest", str(manifest_path)]) == 0
     output = capsys.readouterr().out
-    assert "sample validation: OK" in output
+    assert "sample validation: PASS" in output
 
 
 def test_validate_samples_cli_rejects_admission_failures(
@@ -1369,41 +1394,157 @@ def test_validate_samples_cli_rejects_admission_failures(
     manifest_text = manifest_text.replace('image_file: "2026-05-11_003_zh_diary_tilted.jpg"', 'image_file: "bad-name.jpg"', 1)
     manifest_path.write_text(manifest_text, encoding="utf-8")
 
-    assert main(["validate-samples", "--config", str(config_path), "--manifest", str(manifest_path)]) == 2
+    assert main(["validate-samples", "--vault", str(vault), "--manifest", str(manifest_path)]) == 1
     output = capsys.readouterr().out
     assert "sample validation: FAIL" in output
-    assert "privacy_checked must be true" in output
-    assert "image_sha256 mismatch" in output
-    assert "image_file must match" in output
-    assert "expected_file frontmatter privacy_checked must be true" in output
-    assert "image directory must contain exactly 18 images, got 19" in output
-    assert "files not listed in manifest" in output
-    assert "expected directory must contain exactly 18 .expected.md files, got 19" in output
+    assert "FAIL SAMPLE_PRIVACY_NOT_CHECKED:" in output
+    assert "FAIL SAMPLE_HASH_MISMATCH:" in output
+    assert "FAIL SAMPLE_FILENAME_INVALID:" in output
+    assert "expected frontmatter privacy_checked must be true" in output
+    assert "WARN EXTRA_IMAGE_NOT_IN_MANIFEST:" in output
+
+
+def test_validate_samples_cli_rejects_template_manifest_and_empty_real_samples(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    vault = tmp_path / "template-vault"
+    image_dir = vault / "Inbox" / "HandwritingImages" / "real-samples"
+    expected_dir = vault / ".handwriting-ocr" / "real-samples" / "expected"
+    image_dir.mkdir(parents=True)
+    expected_dir.mkdir(parents=True)
+    config_path = vault / ".handwriting-ocr" / "config.yaml"
+    config_path.write_text(
+        f"""
+watch:
+  input_dir: "{vault / 'Inbox' / 'HandwritingImages'}"
+  output_dir: "{vault / 'Inbox' / 'HandwritingNotes'}"
+""",
+        encoding="utf-8",
+    )
+    first_id = "2026-05-11_001_zh_meeting_clear"
+    (expected_dir / f"{first_id}.expected.md").write_text(
+        f"""---
+sample_id: "{first_id}"
+image_file: "{first_id}.jpg"
+language: "zh-cn"
+scenario: "meeting"
+privacy_checked: false
+---
+
+## expected_text
+
+在这里填写人工转写文本
+
+## must_include
+
+- meeting
+
+## acceptable_variants
+
+- none
+
+## ignore_regions
+
+- none
+
+## notes_for_reviewer
+
+- template
+""",
+        encoding="utf-8",
+    )
+    samples = []
+    for number, (lang, scenario, quality, _ext) in enumerate(
+        [
+            ("zh", "meeting", "clear", "jpg"),
+            ("zh", "todo", "faint", "jpg"),
+            ("zh", "diary", "tilted", "jpg"),
+            ("zh", "vertical", "layout", "jpg"),
+            ("en", "notes", "clear", "jpg"),
+            ("mixed", "bilingual", "clear", "jpg"),
+            ("num", "math", "grid", "jpg"),
+            ("zh", "schedule", "table", "jpg"),
+            ("num", "receipt", "amounts", "jpg"),
+            ("mixed", "contact", "redacted", "jpg"),
+            ("zh", "mindmap", "arrows", "jpg"),
+            ("mixed", "recipe", "shadow", "png"),
+            ("zh", "sticky", "small", "jpg"),
+            ("zh", "notes", "crowded", "jpg"),
+            ("zh", "revision", "crossed", "jpg"),
+            ("zh", "contrast", "faint", "jpg"),
+            ("zh", "photo", "tilted", "jpg"),
+            ("mixed", "pages", "marker", "jpg"),
+        ],
+        start=1,
+    ):
+        sample_id = f"2026-05-11_{number:03d}_{lang}_{scenario}_{quality}"
+        language = {"zh": "zh-cn", "en": "en", "mixed": "zh-cn,en", "num": "numbers"}[lang]
+        samples.append(
+            f"""  - sample_id: "{sample_id}"
+    image_file: "{sample_id}.jpg"
+    image_sha256: "TODO"
+    expected_file: "expected/{sample_id}.expected.md"
+    language: "{language}"
+    scenario: "{scenario}"
+    quality_tags: ["{quality}"]
+    expected_character_count: 20
+    must_include: ["meeting"]
+    review_priority: "p1"
+    privacy_checked: false
+"""
+        )
+    (vault / ".handwriting-ocr" / "real-samples" / "sample-manifest.yaml").write_text(
+        """dataset:
+  id: "real-handwriting-min18-20260511"
+  version: 1
+  owner: "dev"
+  privacy_level: "redacted-local-only"
+  created_at: "2026-05-11"
+  image_dir: "Inbox/HandwritingImages/real-samples"
+  expected_dir: ".handwriting-ocr/real-samples/expected"
+  config_path: ".handwriting-ocr/config.yaml"
+
+validation:
+  minimum_sample_count: 18
+
+samples:
+"""
+        + "\n".join(samples),
+        encoding="utf-8",
+    )
+
+    assert main(["validate-samples", "--vault", str(vault)]) == 1
+    output = capsys.readouterr().out
+
+    assert "FAIL SAMPLE_COUNT_TOO_LOW: image count=0 required>=18" in output
+    assert "FAIL EXPECTED_COUNT_TOO_LOW: expected files=1 required>=18" in output
+    assert "FAIL CONFIG_WATCH_INPUT_DIR_INVALID:" in output
+    assert "FAIL SAMPLE_HASH_MISSING:" in output
+    assert "FAIL SAMPLE_MANIFEST_TEMPLATE_VALUE:" in output
+    assert "FAIL SAMPLE_PRIVACY_NOT_CHECKED:" in output
+    assert "FAIL EXPECTED_FILE_MISSING:" in output
+    assert "FAIL EXPECTED_TEXT_PLACEHOLDER:" in output
 
 
 def test_validate_sample_vault_handles_missing_and_malformed_manifest(tmp_path: Path) -> None:
-    config_path = write_config(tmp_path)
-    config = load_config(config_path)
-    missing = validate_sample_vault(config, tmp_path / "missing.yaml")
+    missing = validate_sample_vault(tmp_path, manifest_path=tmp_path / "missing.yaml")
     assert not missing.ok
-    assert "manifest not found" in missing.errors[0]
+    assert missing.failures[0].code == "SAMPLE_MANIFEST_MISSING"
 
     malformed = tmp_path / "malformed.yaml"
     malformed.write_text("- not a mapping\n", encoding="utf-8")
-    result = validate_sample_vault(config, malformed)
+    result = validate_sample_vault(tmp_path, manifest_path=malformed)
     assert not result.ok
-    assert result.errors == ["manifest root must be a mapping"]
+    assert any(issue.code == "SAMPLE_MANIFEST_SCHEMA_INVALID" for issue in result.failures)
 
     invalid_yaml = tmp_path / "invalid.yaml"
     invalid_yaml.write_text("dataset: [\n", encoding="utf-8")
-    result = validate_sample_vault(config, invalid_yaml)
+    result = validate_sample_vault(tmp_path, manifest_path=invalid_yaml)
     assert not result.ok
-    assert "manifest could not be parsed" in result.errors[0]
+    assert any(issue.code == "SAMPLE_MANIFEST_INVALID_YAML" for issue in result.failures)
 
 
 def test_validate_sample_vault_reports_manifest_shape_errors(tmp_path: Path) -> None:
-    config_path = write_config(tmp_path)
-    config = load_config(config_path)
     manifest = tmp_path / "shape.yaml"
     manifest.write_text(
         """
@@ -1416,14 +1557,14 @@ samples: "bad"
         encoding="utf-8",
     )
 
-    result = validate_sample_vault(config, manifest)
+    result = validate_sample_vault(tmp_path, manifest_path=manifest)
 
     assert not result.ok
-    assert "dataset must be a mapping" in result.errors
-    assert "samples must be a list" in result.errors
-    assert any("samples must contain exactly 18 entries" in error for error in result.errors)
-    assert any("watch.input_dir must match dataset.image_dir" in error for error in result.errors)
-    assert any("dataset.expected_dir does not exist" in error for error in result.errors)
+    assert any(issue.message == "dataset must be a mapping" for issue in result.failures)
+    assert any(issue.message == "samples must be a non-empty list" for issue in result.failures)
+    assert any(issue.code == "SAMPLE_COUNT_TOO_LOW" for issue in result.failures)
+    assert any(issue.code == "CONFIG_FILE_MISSING" for issue in result.failures)
+    assert any(issue.code == "SAMPLE_EXPECTED_DIR_MISSING" for issue in result.failures)
 
 
 def test_validate_sample_vault_reports_sample_field_errors_and_expected_warnings(tmp_path: Path) -> None:
@@ -1462,16 +1603,13 @@ samples:
 """,
         encoding="utf-8",
     )
-    config = load_config(write_config(tmp_path / "config-root"))
-
-    result = validate_sample_vault(config, manifest)
+    result = validate_sample_vault(tmp_path, manifest_path=manifest, image_dir=image_dir, expected_dir=expected_dir, min_count=2)
 
     assert not result.ok
-    assert "samples[1] must be a mapping" in result.errors
-    assert any("image_file basename must equal sample_id" in error for error in result.errors)
-    assert any("expected_file must be expected/2026-05-11_001_zh_meeting_clear.expected.md" in error for error in result.errors)
-    assert any("image_file is missing" in error for error in result.errors)
-    assert any("expected_file is missing" in error for error in result.errors)
+    assert any(issue.message == "samples[1] must be a mapping" for issue in result.failures)
+    assert any(issue.code == "SAMPLE_ID_MISMATCH" for issue in result.failures)
+    assert any(issue.code == "SAMPLE_IMAGE_MISSING" for issue in result.failures)
+    assert any(issue.code == "EXPECTED_FILE_MISSING" for issue in result.failures)
 
     manifest.write_text(
         f"""
@@ -1491,10 +1629,9 @@ samples:
         encoding="utf-8",
     )
 
-    result = validate_sample_vault(load_config(write_config(tmp_path / "config-root-2")), manifest)
+    result = validate_sample_vault(tmp_path, manifest_path=manifest, image_dir=image_dir, expected_dir=expected_dir, min_count=1)
 
     assert not result.ok
-    assert any("image_sha256 must be a 64-character" in error for error in result.errors)
-    assert any("frontmatter sample_id must be" in error for error in result.errors)
-    assert result.warnings
-    assert "expected_text section marker" in result.warnings[0]
+    assert any(issue.code == "SAMPLE_HASH_MISSING" for issue in result.failures)
+    assert any(issue.code == "EXPECTED_METADATA_MISMATCH" for issue in result.failures)
+    assert any(issue.code == "EXPECTED_TEXT_PLACEHOLDER" for issue in result.failures)

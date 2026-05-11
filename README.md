@@ -148,10 +148,10 @@ handwriting-ocr watch --config ~/ObsidianVault/.handwriting-ocr/config.yaml
 样例集进入 OCR 复验前先运行准入校验：
 
 ```bash
-handwriting-ocr validate-samples --config "$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml"
+handwriting-ocr validate-samples --vault "$HW_SAMPLE_VAULT"
 ```
 
-该命令校验 `sample-manifest.yaml`、18 张图片、命名规则、18 个 `.expected.md` 文件、`privacy_checked: true`、`image_sha256` 和 `watch.input_dir`。成功退出码为 `0`；发现准入问题时退出码为 `2` 并输出逐条 `error:`。
+该命令校验 `sample-manifest.yaml`、18 张图片、命名规则、18 个 `.expected.md` 文件、`privacy_checked: true`、`image_sha256` 和 `watch.input_dir`。成功退出码为 `0`；发现准入问题时退出码为 `1` 并输出逐条可操作的 `FAIL <CODE>:`。`--format json` 可用于 CI 或 api-tester 自动解析。
 
 可复制模板：
 

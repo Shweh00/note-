@@ -39,14 +39,14 @@ $HW_SAMPLE_VAULT/.handwriting-ocr/real-samples/expected/<sample_id>.expected.md
 准备完成后先运行准入校验。校验会检查 `sample-manifest.yaml`、18 张图片、命名规则、18 个 `.expected.md` 文件、manifest 与 expected frontmatter 的 `privacy_checked: true`、图片 SHA-256，以及配置里的 `watch.input_dir` 是否指向样例图片目录：
 
 ```bash
-handwriting-ocr validate-samples --config "$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml"
+handwriting-ocr validate-samples --vault "$HW_SAMPLE_VAULT"
 ```
 
 如果 manifest 不在默认位置，也可以显式传入：
 
 ```bash
 handwriting-ocr validate-samples \
-  --config "$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml" \
+  --vault "$HW_SAMPLE_VAULT" \
   --manifest "$HW_SAMPLE_VAULT/.handwriting-ocr/real-samples/sample-manifest.yaml"
 ```
 
@@ -155,12 +155,12 @@ cd /workspace/project
 export HW_SAMPLE_VAULT=/tmp/hw-real-sample-vault
 
 handwriting-ocr doctor --config "$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml"
-handwriting-ocr validate-samples --config "$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml"
+handwriting-ocr validate-samples --vault "$HW_SAMPLE_VAULT"
 handwriting-ocr batch --config "$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml"
 handwriting-ocr status --config "$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml"
 ```
 
-`validate-samples` 成功时退出码为 `0` 并输出 `sample validation: OK`；发现准入问题时退出码为 `2` 并逐条输出 `error:`，适合 api-tester 在真实 OCR 前先拒收不完整样例集。
+`validate-samples` 成功时退出码为 `0` 并输出 `sample validation: PASS`；发现准入问题时退出码为 `1` 并逐条输出 `FAIL <CODE>:`，适合 api-tester 在真实 OCR 前先拒收不完整样例集。模板态 manifest、`privacy_checked: false`、`image_sha256: TODO`、expected 缺失或不足、图片数量不足、`watch.input_dir` 指错都会返回非 `0`。
 
 如果需要手工排查目录数量，也可以运行：
 

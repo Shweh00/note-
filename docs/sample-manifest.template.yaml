@@ -15,7 +15,7 @@ validation:
   required_filename_pattern: "^\\d{4}-\\d{2}-\\d{2}_[0-9]{3}_(zh|en|mixed|num)_[a-z0-9-]+_[a-z0-9-]+\\.(jpg|jpeg|png)$"
   required_privacy_checked: true
   required_commands:
-    - "handwriting-ocr validate-samples --config \"$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml\""
+    - "handwriting-ocr validate-samples --vault \"$HW_SAMPLE_VAULT\""
     - "handwriting-ocr doctor --config \"$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml\""
     - "handwriting-ocr batch --config \"$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml\""
     - "handwriting-ocr status --config \"$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml\""
