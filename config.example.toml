@@ -1,0 +1,33 @@
+# Copy this file to config.toml and adjust the paths.
+
+# Folder where new handwritten images arrive.
+input_dir = "incoming"
+
+# Folder inside your Obsidian vault where Markdown notes should be written.
+output_dir = "vault/Handwriting Notes"
+
+# Images are copied here so the generated notes can embed them reliably.
+assets_dir = "vault/Handwriting Notes/assets"
+
+# JSON state file used for de-duplication.
+state_path = ".handwriting-obsidian-state.json"
+
+# Supported image extensions.
+extensions = [".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp"]
+
+# Tags added to every generated note.
+tags = ["handwriting", "ocr"]
+
+# Poll interval for the watch command, in seconds.
+watch_interval_seconds = 5
+
+[ocr]
+# "mock" works without external services. It uses a same-name .txt sidecar file
+# when present, otherwise it writes fallback_text.
+provider = "mock"
+fallback_text = "TODO: replace with OCR text"
+
+# Optional local OCR provider. Requires tesseract to be installed separately:
+# provider = "tesseract"
+# command = "tesseract"
+# languages = "eng+chi_sim"
