@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 import json
 import urllib.error
@@ -8,7 +9,8 @@ import pytest
 
 from handwriting_obsidian.cli import main
 from handwriting_obsidian.config import OcrConfig, _load_simple_yaml, _parse_scalar, load_config
-from handwriting_obsidian.markdown import build_note_path, slugify
+from handwriting_obsidian.index import update_index
+from handwriting_obsidian.markdown import build_note_path, render_date_folder, resolve_note_output_dir, slugify
 from handwriting_obsidian.ocr import MockOcrEngine, OcrResult, create_ocr_engine
 from handwriting_obsidian.processor import (
     archive_image,
@@ -105,6 +107,64 @@ def test_batch_mock_ocr_generates_obsidian_markdown_and_sqlite_dedupe(tmp_path: 
         counts = state.counts()
     assert counts["success"] == 1
     assert counts["duplicate"] == 0
+    assert not (config.output_dir / "Index.md").exists()
+    assert config.markdown.date_folder.enabled is False
+
+
+def test_date_folder_outputs_final_path_and_relative_image(tmp_path: Path) -> None:
+    config_path = write_config(tmp_path)
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            '  default_tags: ["handwriting", "ocr", "to-review"]',
+            '  default_tags: ["handwriting", "ocr", "to-review"]\n'
+            "  date_folder:\n"
+            "    enabled: true\n"
+            '    pattern: "YYYY/MM/DD"\n'
+            '    date_source: "source_name"',
+        ),
+        encoding="utf-8",
+    )
+    config = load_config(config_path)
+    image = tmp_path / "incoming" / "2026-05-11 meeting.png"
+    image.write_bytes(b"dated")
+    image.with_suffix(".txt").write_text("日期目录内容", encoding="utf-8")
+
+    results = process_batch(config, MockOcrEngine("fallback"))
+
+    assert [result.status for result in results] == ["success"]
+    note = results[0].note_path
+    assert note is not None
+    assert note.parent == config.output_dir / "2026" / "05" / "11"
+    assert "日期目录内容" in note.read_text(encoding="utf-8")
+    assert "![[../../../../../../incoming/processed/2026-05-11 meeting.png]]" in note.read_text(encoding="utf-8")
+    with ProcessingState.open(config.state_path) as state:
+        records = state.successful_records()
+    assert records[0].output_path == str(note)
+
+
+def test_date_folder_creation_failure_marks_failed_and_error_archives(tmp_path: Path) -> None:
+    config_path = write_config(tmp_path)
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            '  default_tags: ["handwriting", "ocr", "to-review"]',
+            '  default_tags: ["handwriting", "ocr", "to-review"]\n'
+            "  date_folder:\n"
+            "    enabled: true\n"
+            '    pattern: "YYYY/MM/DD"\n',
+        ),
+        encoding="utf-8",
+    )
+    config = load_config(config_path)
+    image = tmp_path / "incoming" / "dir-fail.png"
+    image.write_bytes(b"cannot create date dir")
+    config.output_dir.mkdir(parents=True)
+    (config.output_dir / str(datetime.now(timezone.utc).year)).write_text("not a directory", encoding="utf-8")
+
+    results = process_batch(config, MockOcrEngine("text"))
+
+    assert [result.status for result in results] == ["failed"]
+    assert not (config.processed_dir / "dir-fail.png").exists()
+    assert (config.error_dir / "dir-fail.png").exists()
 
 
 def test_duplicate_content_in_new_file_is_recorded_without_new_note(tmp_path: Path) -> None:
@@ -128,6 +188,80 @@ def test_duplicate_content_in_new_file_is_recorded_without_new_note(tmp_path: Pa
         counts = state.counts()
     assert counts["success"] == 1
     assert counts["duplicate"] == 1
+
+
+def test_custom_template_fallback_fail_and_unknown_variable(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    template = tmp_path / "note-template.md"
+    template.write_text(
+        "# {{title}}\n{{recognized_markdown}}\nimage={{source_image}}\nraw={{raw_ocr}}\nunknown={{unknown}}\n",
+        encoding="utf-8",
+    )
+    config_path = write_config(tmp_path)
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            '  default_tags: ["handwriting", "ocr", "to-review"]',
+            '  default_tags: ["handwriting", "ocr", "to-review"]\n'
+            "  template:\n"
+            '    mode: "file"\n'
+            f'    file_path: "{template}"\n'
+            '    missing_behavior: "fallback"',
+        ),
+        encoding="utf-8",
+    )
+    config = load_config(config_path)
+    image = tmp_path / "incoming" / "templated.png"
+    image.write_bytes(b"template")
+    image.with_suffix(".txt").write_text("模板正文", encoding="utf-8")
+
+    results = process_batch(config, MockOcrEngine("fallback"))
+
+    assert [result.status for result in results] == ["success"]
+    note = results[0].note_path
+    assert note is not None
+    text = note.read_text(encoding="utf-8")
+    assert "# 手写识别 - templated" in text
+    assert "模板正文" in text
+    assert "image=../../../incoming/processed/templated.png" in text
+    assert "raw=模板正文" in text
+    assert "unknown={{unknown}}" in text
+    assert "unknown variable {{unknown}}" in capsys.readouterr().out
+
+    fallback_config_path = write_config(tmp_path / "fallback")
+    fallback_config_path.write_text(
+        fallback_config_path.read_text(encoding="utf-8").replace(
+            '  default_tags: ["handwriting", "ocr", "to-review"]',
+            '  default_tags: ["handwriting", "ocr", "to-review"]\n'
+            "  template:\n"
+            '    mode: "file"\n'
+            f'    file_path: "{tmp_path / "missing.md"}"\n'
+            '    missing_behavior: "fallback"',
+        ),
+        encoding="utf-8",
+    )
+    fallback_config = load_config(fallback_config_path)
+    fallback_image = tmp_path / "fallback" / "incoming" / "fallback.png"
+    fallback_image.write_bytes(b"fallback")
+    assert [result.status for result in process_batch(fallback_config, MockOcrEngine("fallback text"))] == ["success"]
+    assert "## 识别正文" in next(fallback_config.output_dir.glob("*.md")).read_text(encoding="utf-8")
+
+    fail_config_path = write_config(tmp_path / "fail-template")
+    fail_config_path.write_text(
+        fail_config_path.read_text(encoding="utf-8").replace(
+            '  default_tags: ["handwriting", "ocr", "to-review"]',
+            '  default_tags: ["handwriting", "ocr", "to-review"]\n'
+            "  template:\n"
+            '    mode: "file"\n'
+            f'    file_path: "{tmp_path / "missing-fail.md"}"\n'
+            '    missing_behavior: "fail"',
+        ),
+        encoding="utf-8",
+    )
+    fail_config = load_config(fail_config_path)
+    fail_image = tmp_path / "fail-template" / "incoming" / "fail.png"
+    fail_image.write_bytes(b"fail")
+    failed = process_batch(fail_config, MockOcrEngine("will fail"))
+    assert [result.status for result in failed] == ["failed"]
+    assert not list(fail_config.output_dir.glob("*.md"))
 
 
 def test_keep_duplicate_is_not_recorded_again_on_repeated_batch(tmp_path: Path) -> None:
@@ -156,6 +290,106 @@ def test_keep_duplicate_is_not_recorded_again_on_repeated_batch(tmp_path: Path) 
         counts = state.counts()
     assert counts["success"] == 1
     assert counts["duplicate"] == 1
+
+
+def test_index_managed_block_sorting_idempotency_and_duplicates(tmp_path: Path) -> None:
+    config_path = write_config(tmp_path)
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8")
+        .replace(
+            '  default_tags: ["handwriting", "ocr", "to-review"]',
+            '  default_tags: ["handwriting", "ocr", "to-review"]\n'
+            "  date_folder:\n"
+            "    enabled: true\n"
+            '    pattern: "YYYY/MM/DD"',
+        )
+        + """
+index:
+  enabled: true
+  path: "Index.md"
+  title: "手写识别索引"
+  grouping: "date"
+  sort: "desc"
+  include_status: true
+  include_source_link: true
+  update_mode: "managed_block"
+""",
+        encoding="utf-8",
+    )
+    config = load_config(config_path)
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    index_file = config.output_dir / "Index.md"
+    index_file.write_text("user intro\n<!-- handwriting-ocr:index:start -->\nold\n<!-- handwriting-ocr:index:end -->\nuser outro\n", encoding="utf-8")
+    first = tmp_path / "incoming" / "first.png"
+    second = tmp_path / "incoming" / "second.png"
+    first.write_bytes(b"same")
+    second.write_bytes(b"other")
+
+    first_result = process_batch(config, MockOcrEngine("text"))
+    duplicate = tmp_path / "incoming" / "duplicate.png"
+    duplicate.write_bytes(b"same")
+    duplicate_result = process_batch(config, MockOcrEngine("text"))
+    second_result = process_batch(config, MockOcrEngine("text"))
+
+    assert [result.status for result in first_result] == ["success", "success"]
+    assert [result.status for result in duplicate_result] == ["duplicate"]
+    assert second_result == []
+    content = index_file.read_text(encoding="utf-8")
+    assert content.startswith("user intro")
+    assert content.rstrip().endswith("user outro")
+    assert content.count("- [[") == 2
+    assert content.count("first") == 3  # note target, alias, and source image
+    assert "## " in content
+    before = content
+    with ProcessingState.open(config.state_path) as state:
+        assert update_index(config, state) == []
+    assert index_file.read_text(encoding="utf-8") == before
+
+
+def test_index_flat_absolute_path_and_warning_on_path_conflict(tmp_path: Path) -> None:
+    config_path = write_config(tmp_path)
+    absolute_index = tmp_path / "absolute-index.md"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8")
+        + f"""
+index:
+  enabled: true
+  path: "{absolute_index}"
+  title: "Flat"
+  grouping: "flat"
+  sort: "asc"
+  include_status: false
+  include_source_link: false
+  update_mode: "managed_block"
+""",
+        encoding="utf-8",
+    )
+    config = load_config(config_path)
+    image = tmp_path / "incoming" / "absolute.png"
+    image.write_bytes(b"absolute")
+    result = process_batch(config, MockOcrEngine("flat"))[0]
+    assert result.status == "success"
+    assert absolute_index.exists()
+    assert "`success`" not in absolute_index.read_text(encoding="utf-8")
+
+    conflict_config_path = write_config(tmp_path / "index-conflict")
+    conflict_config_path.write_text(
+        conflict_config_path.read_text(encoding="utf-8")
+        + """
+index:
+  enabled: true
+  path: "Index.md"
+""",
+        encoding="utf-8",
+    )
+    conflict_config = load_config(conflict_config_path)
+    conflict_config.output_dir.mkdir(parents=True)
+    (conflict_config.output_dir / "Index.md").mkdir()
+    conflict_image = tmp_path / "index-conflict" / "incoming" / "conflict.png"
+    conflict_image.write_bytes(b"conflict")
+    conflict = process_batch(conflict_config, MockOcrEngine("conflict"))[0]
+    assert conflict.status == "success"
+    assert "index warning" in conflict.reason
 
 
 def test_retry_failed_processes_error_archived_file(tmp_path: Path) -> None:
@@ -239,6 +473,29 @@ def test_config_validation_and_helpers(tmp_path: Path, monkeypatch: pytest.Monke
     )
     with pytest.raises(ValueError):
         load_config(bad_dedupe)
+
+    bad_date = write_config(tmp_path / "bad-date")
+    bad_date.write_text(
+        bad_date.read_text(encoding="utf-8").replace(
+            '  default_tags: ["handwriting", "ocr", "to-review"]',
+            '  default_tags: ["handwriting", "ocr", "to-review"]\n'
+            "  date_folder:\n"
+            "    enabled: true\n"
+            '    pattern: "../YYYY"\n'
+            '    date_source: "processed_at"',
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="safe relative"):
+        load_config(bad_date)
+
+    bad_index = write_config(tmp_path / "bad-index")
+    bad_index.write_text(bad_index.read_text(encoding="utf-8") + "\nindex:\n  grouping: bad\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="index.grouping"):
+        load_config(bad_index)
+
+    assert render_date_folder("YYYY_MM_DD", datetime(2026, 5, 11, tzinfo=timezone.utc)) == Path("2026_05_11")
+    assert resolve_note_output_dir(load_config(config_path), tmp_path / "x.png", datetime.now(timezone.utc)) == load_config(config_path).output_dir
 
 
 def test_config_toml_fallback_simple_yaml_and_validation(tmp_path: Path) -> None:

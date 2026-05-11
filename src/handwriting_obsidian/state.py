@@ -171,6 +171,16 @@ class ProcessingState:
         ).fetchall()
         return [_record(row) for row in rows]
 
+    def successful_records(self) -> list[StateRecord]:
+        rows = self.connection.execute(
+            """
+            SELECT * FROM processed_files
+            WHERE status = 'success' AND output_path IS NOT NULL
+            ORDER BY created_at ASC, id ASC
+            """
+        ).fetchall()
+        return [_record(row) for row in rows]
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")

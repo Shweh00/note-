@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 import ast
+import re
 import tomllib
 
 
@@ -35,12 +36,28 @@ class OcrConfig:
 
 
 @dataclass(frozen=True)
+class DateFolderConfig:
+    enabled: bool = False
+    pattern: str = "YYYY/MM/DD"
+    date_source: str = "processed_at"
+
+
+@dataclass(frozen=True)
+class TemplateConfig:
+    mode: str = "default"
+    file_path: Path | None = None
+    missing_behavior: str = "fallback"
+
+
+@dataclass(frozen=True)
 class MarkdownConfig:
     filename_template: str = "{{date}}-{{source_basename}}.md"
     include_frontmatter: bool = True
     include_source_image: bool = True
     include_raw_ocr: bool = True
     default_tags: tuple[str, ...] = ("handwriting", "ocr", "to-review")
+    date_folder: DateFolderConfig = field(default_factory=DateFolderConfig)
+    template: TemplateConfig = field(default_factory=TemplateConfig)
 
 
 @dataclass(frozen=True)
@@ -62,11 +79,24 @@ class ArchiveConfig:
 
 
 @dataclass(frozen=True)
+class IndexConfig:
+    enabled: bool = False
+    path: Path | None = Path("Index.md")
+    title: str = "手写识别索引"
+    grouping: str = "date"
+    sort: str = "desc"
+    include_status: bool = True
+    include_source_link: bool = True
+    update_mode: str = "managed_block"
+
+
+@dataclass(frozen=True)
 class AppConfig:
     watch: WatchConfig
     ocr: OcrConfig
     markdown: MarkdownConfig
     state: StateConfig
+    index: IndexConfig = field(default_factory=IndexConfig)
     dedupe: DedupeConfig = field(default_factory=DedupeConfig)
     archive: ArchiveConfig = field(default_factory=ArchiveConfig)
     extensions: tuple[str, ...] = SUPPORTED_EXTENSIONS
@@ -159,6 +189,14 @@ def _validate_choice(name: str, value: str, choices: set[str]) -> None:
         raise ValueError(f"{name} must be one of {sorted(choices)}, got {value!r}")
 
 
+def _validate_date_pattern(pattern: str) -> None:
+    if Path(pattern).is_absolute() or ".." in Path(pattern).parts:
+        raise ValueError("markdown.date_folder.pattern must be a safe relative path")
+    stripped = pattern.replace("YYYY", "").replace("MM", "").replace("DD", "")
+    if stripped and not re.fullmatch(r"[-_/]+", stripped):
+        raise ValueError("markdown.date_folder.pattern supports only YYYY, MM, DD, '/', '-' and '_'")
+
+
 def load_config(path: Path) -> AppConfig:
     config_path = path.expanduser().resolve()
     raw = _load_raw(config_path)
@@ -171,8 +209,11 @@ def load_config(path: Path) -> AppConfig:
     ocr_raw = raw.get("ocr", {})
     markdown_raw = raw.get("markdown", {})
     state_raw = raw.get("state", {})
+    index_raw = raw.get("index", {})
     dedupe_raw = raw.get("dedupe", {})
     archive_raw = raw.get("archive", {})
+    date_folder_raw = markdown_raw.get("date_folder", {}) if isinstance(markdown_raw, dict) else {}
+    template_raw = markdown_raw.get("template", {}) if isinstance(markdown_raw, dict) else {}
 
     input_dir = _resolve(base, watch_raw["input_dir"])
     output_dir = _resolve(base, watch_raw["output_dir"])
@@ -187,6 +228,12 @@ def load_config(path: Path) -> AppConfig:
     after_error = str(archive_raw.get("after_error", "move"))
     dedupe_strategy = str(dedupe_raw.get("strategy", "content_hash"))
     dedupe_on_duplicate = str(dedupe_raw.get("on_duplicate", "skip"))
+    date_source = str(date_folder_raw.get("date_source", "processed_at"))
+    template_mode = str(template_raw.get("mode", "default"))
+    template_missing_behavior = str(template_raw.get("missing_behavior", "fallback"))
+    index_grouping = str(index_raw.get("grouping", "date"))
+    index_sort = str(index_raw.get("sort", "desc"))
+    index_update_mode = str(index_raw.get("update_mode", "managed_block"))
 
     _validate_choice("ocr.mode", ocr_mode, {"online", "offline", "mock"})
     _validate_choice("ocr.provider", ocr_provider, {"openai", "paddle", "mock", "tesseract"})
@@ -194,6 +241,14 @@ def load_config(path: Path) -> AppConfig:
     _validate_choice("archive.after_error", after_error, {"move", "keep", "copy"})
     _validate_choice("dedupe.strategy", dedupe_strategy, {"content_hash", "path_and_mtime"})
     _validate_choice("dedupe.on_duplicate", dedupe_on_duplicate, {"skip", "keep"})
+    _validate_choice("markdown.date_folder.date_source", date_source, {"processed_at", "source_mtime", "source_name"})
+    _validate_choice("markdown.template.mode", template_mode, {"default", "file"})
+    _validate_choice("markdown.template.missing_behavior", template_missing_behavior, {"fallback", "fail"})
+    _validate_choice("index.grouping", index_grouping, {"date", "flat"})
+    _validate_choice("index.sort", index_sort, {"desc", "asc"})
+    _validate_choice("index.update_mode", index_update_mode, {"managed_block"})
+    date_pattern = str(date_folder_raw.get("pattern", "YYYY/MM/DD"))
+    _validate_date_pattern(date_pattern)
 
     settle_seconds = float(watch_raw.get("settle_seconds", 5))
     if not 1 <= settle_seconds <= 300:
@@ -226,10 +281,32 @@ def load_config(path: Path) -> AppConfig:
             include_source_image=bool(markdown_raw.get("include_source_image", True)),
             include_raw_ocr=bool(markdown_raw.get("include_raw_ocr", True)),
             default_tags=tuple(markdown_raw.get("default_tags", ("handwriting", "ocr", "to-review"))),
+            date_folder=DateFolderConfig(
+                enabled=bool(date_folder_raw.get("enabled", False)),
+                pattern=date_pattern,
+                date_source=date_source,
+            ),
+            template=TemplateConfig(
+                mode=template_mode,
+                file_path=_resolve(base, template_raw["file_path"])
+                if template_raw.get("file_path")
+                else None,
+                missing_behavior=template_missing_behavior,
+            ),
         ),
         state=StateConfig(
             sqlite_path=sqlite_path,
             log_path=_resolve(base, log_value) if log_value else None,
+        ),
+        index=IndexConfig(
+            enabled=bool(index_raw.get("enabled", False)),
+            path=_resolve(base, index_raw["path"]) if index_raw.get("path") and Path(str(index_raw["path"])).is_absolute() else Path(str(index_raw.get("path", "Index.md"))),
+            title=str(index_raw.get("title", "手写识别索引")),
+            grouping=index_grouping,
+            sort=index_sort,
+            include_status=bool(index_raw.get("include_status", True)),
+            include_source_link=bool(index_raw.get("include_source_link", True)),
+            update_mode=index_update_mode,
         ),
         dedupe=DedupeConfig(strategy=dedupe_strategy, on_duplicate=dedupe_on_duplicate),
         archive=ArchiveConfig(after_success=after_success, after_error=after_error),

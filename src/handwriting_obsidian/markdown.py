@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import re
 
@@ -9,6 +9,12 @@ from .ocr import OcrResult
 
 
 INVALID_FILENAME_CHARS = r'[\/\\:*?"<>|]'
+TEMPLATE_VARIABLE = re.compile(r"{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}}")
+SOURCE_NAME_DATE_PATTERNS = (
+    re.compile(r"(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})"),
+    re.compile(r"(?P<year>\d{4})_(?P<month>\d{2})_(?P<day>\d{2})"),
+    re.compile(r"(?P<year>\d{4})(?P<month>\d{2})(?P<day>\d{2})"),
+)
 
 
 def slugify(value: str) -> str:
@@ -21,12 +27,133 @@ def markdown_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def build_note_path(output_dir: Path, source_stem: str, created_at: datetime, source_hash: str) -> Path:
-    name = f"{created_at.strftime('%Y-%m-%d-%H%M')}-{slugify(source_stem)}.md"
+def build_note_path(
+    output_dir: Path,
+    source_stem: str,
+    created_at: datetime,
+    source_hash: str,
+    filename_template: str = "{{datetime}}-{{source_basename}}.md",
+) -> Path:
+    iso_date = created_at.strftime("%Y-%m-%d")
+    values = {
+        "date": iso_date,
+        "datetime": created_at.strftime("%Y-%m-%d-%H%M"),
+        "source_basename": slugify(source_stem),
+        "source_hash": source_hash,
+    }
+    name = filename_template
+    for key, value in values.items():
+        name = re.sub(r"{{\s*" + re.escape(key) + r"\s*}}", value, name)
+    if "{{" in name or "}}" in name:
+        name = f"{created_at.strftime('%Y-%m-%d-%H%M')}-{slugify(source_stem)}.md"
+    name = slugify(Path(name).stem) + ".md"
     candidate = output_dir / name
     if candidate.exists():
-        candidate = output_dir / f"{created_at.strftime('%Y-%m-%d-%H%M')}-{slugify(source_stem)}-{source_hash[:8]}.md"
+        candidate = output_dir / f"{candidate.stem}-{source_hash[:8]}.md"
     return candidate
+
+
+def render_date_folder(pattern: str, dt: datetime) -> Path:
+    rendered = pattern.replace("YYYY", dt.strftime("%Y")).replace("MM", dt.strftime("%m")).replace("DD", dt.strftime("%d"))
+    return Path(rendered)
+
+
+def note_date(config: AppConfig, image_path: Path, processed_at: datetime) -> datetime:
+    source = config.markdown.date_folder.date_source
+    if source == "source_mtime":
+        return datetime.fromtimestamp(image_path.stat().st_mtime, tz=timezone.utc)
+    if source == "source_name":
+        for pattern in SOURCE_NAME_DATE_PATTERNS:
+            match = pattern.search(image_path.name)
+            if match:
+                parts = {key: int(value) for key, value in match.groupdict().items()}
+                try:
+                    return datetime(parts["year"], parts["month"], parts["day"], tzinfo=timezone.utc)
+                except ValueError:
+                    return processed_at
+    return processed_at
+
+
+def resolve_note_output_dir(config: AppConfig, image_path: Path, processed_at: datetime) -> Path:
+    if not config.markdown.date_folder.enabled:
+        return config.output_dir
+    return config.output_dir / render_date_folder(config.markdown.date_folder.pattern, note_date(config, image_path, processed_at))
+
+
+def load_template(config: AppConfig) -> tuple[str | None, list[str]]:
+    if config.markdown.template.mode == "default":
+        return None, []
+    template_path = config.markdown.template.file_path
+    if template_path is None:
+        return _missing_template(config, "template file_path is empty")
+    try:
+        template = template_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return _missing_template(config, f"template file cannot be read: {exc}")
+    if not template.strip():
+        return _missing_template(config, "template file is empty")
+    warnings = []
+    if "{{recognized_markdown}}" not in template:
+        warnings.append("template warning: missing {{recognized_markdown}}")
+    return template, warnings
+
+
+def _missing_template(config: AppConfig, message: str) -> tuple[str | None, list[str]]:
+    if config.markdown.template.missing_behavior == "fail":
+        raise FileNotFoundError(message)
+    return None, [f"template warning: {message}; using default template"]
+
+
+def render_template(template: str, context: dict[str, str]) -> tuple[str, list[str]]:
+    warnings: list[str] = []
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name not in context:
+            warnings.append(f"template warning: unknown variable {{{{{name}}}}}")
+            return match.group(0)
+        return context[name]
+
+    return TEMPLATE_VARIABLE.sub(replace, template), warnings
+
+
+def build_template_context(
+    *,
+    config: AppConfig,
+    title: str,
+    created_at: datetime,
+    source_basename: str,
+    source_image_relative: str,
+    image_hash: str,
+    ocr_result: OcrResult,
+) -> dict[str, str]:
+    iso_created = created_at.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    text = ocr_result.text.strip() or "_未识别到文字。_"
+    raw_text = ocr_result.raw_text.strip() or "(empty)"
+    uncertain = "\n".join(f"- {item}" for item in ocr_result.uncertain_items) or "- 无"
+    processing_info = (
+        f"- 来源文件：`{source_basename}`\n"
+        f"- 处理时间：`{iso_created}`\n"
+        "- 处理状态：`待人工校对`"
+    )
+    return {
+        "title": f"手写识别 - {title}",
+        "created_at": iso_created,
+        "date": created_at.strftime("%Y-%m-%d"),
+        "source_basename": source_basename,
+        "source_image": source_image_relative,
+        "source_hash": f"sha256:{image_hash}",
+        "ocr_mode": config.ocr.mode,
+        "ocr_provider": ocr_result.provider,
+        "ocr_model": ocr_result.model or "",
+        "language": ocr_result.language,
+        "status": "to-review",
+        "tags_yaml": "\n".join(f"  - {tag}" for tag in config.markdown.default_tags),
+        "recognized_markdown": text,
+        "uncertain_items": uncertain,
+        "raw_ocr": raw_text,
+        "processing_info": processing_info,
+    }
 
 
 def render_note(
@@ -39,38 +166,49 @@ def render_note(
     image_hash: str,
     ocr_result: OcrResult,
 ) -> str:
-    iso_created = created_at.replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    tag_lines = "\n".join(f"  - {tag}" for tag in config.markdown.default_tags)
-    text = ocr_result.text.strip() or "_未识别到文字。_"
-    raw_text = ocr_result.raw_text.strip() or "(empty)"
-    uncertain = "\n".join(f"- {item}" for item in ocr_result.uncertain_items) or "- 无"
-    model = ocr_result.model or ""
-    return (
-        "---\n"
-        f'title: "手写识别 - {markdown_escape(title)}"\n'
-        f"created: {iso_created}\n"
-        f'source_image: "{markdown_escape(source_image_relative)}"\n'
-        f'source_hash: "sha256:{image_hash}"\n'
-        f'ocr_mode: "{config.ocr.mode}"\n'
-        f'ocr_provider: "{ocr_result.provider}"\n'
-        f'ocr_model: "{markdown_escape(model)}"\n'
-        f'language: "{ocr_result.language}"\n'
-        'status: "to-review"\n'
-        "tags:\n"
-        f"{tag_lines}\n"
-        "---\n\n"
-        f"# 手写识别 - {title}\n\n"
-        f"![[{source_image_relative}]]\n\n"
-        "## 识别正文\n\n"
-        f"{text}\n\n"
-        "## 可能不确定的内容\n\n"
-        f"{uncertain}\n\n"
-        "## 原始 OCR\n\n"
-        "```text\n"
-        f"{raw_text}\n"
-        "```\n\n"
-        "## 处理信息\n\n"
-        f"- 来源文件：`{source_basename}`\n"
-        f"- 处理时间：`{iso_created}`\n"
-        "- 处理状态：`待人工校对`\n"
+    context = build_template_context(
+        config=config,
+        title=title,
+        created_at=created_at,
+        source_basename=source_basename,
+        source_image_relative=source_image_relative,
+        image_hash=image_hash,
+        ocr_result=ocr_result,
     )
+    custom_template, warnings = load_template(config)
+    if custom_template is not None:
+        rendered, render_warnings = render_template(custom_template, context)
+        for warning in (*warnings, *render_warnings):
+            print(warning, flush=True)
+        return rendered
+
+    parts: list[str] = []
+    if config.markdown.include_frontmatter:
+        parts.extend(
+            [
+                "---",
+                f'title: "{markdown_escape(context["title"])}"',
+                f"created: {context['created_at']}",
+                f'source_image: "{markdown_escape(source_image_relative)}"',
+                f'source_hash: "{context["source_hash"]}"',
+                f'ocr_mode: "{config.ocr.mode}"',
+                f'ocr_provider: "{ocr_result.provider}"',
+                f'ocr_model: "{markdown_escape(context["ocr_model"])}"',
+                f'language: "{ocr_result.language}"',
+                'status: "to-review"',
+                "tags:",
+                context["tags_yaml"],
+                "---",
+                "",
+            ]
+        )
+    parts.extend([f"# {context['title']}", ""])
+    if config.markdown.include_source_image:
+        parts.extend([f"![[{source_image_relative}]]", ""])
+    parts.extend(["## 识别正文", "", context["recognized_markdown"], "", "## 可能不确定的内容", "", context["uncertain_items"], ""])
+    if config.markdown.include_raw_ocr:
+        parts.extend(["## 原始 OCR", "", "```text", context["raw_ocr"], "```", ""])
+    parts.extend(["## 处理信息", "", context["processing_info"], ""])
+    for warning in warnings:
+        print(warning, flush=True)
+    return "\n".join(parts)

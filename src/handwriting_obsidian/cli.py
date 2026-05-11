@@ -210,6 +210,14 @@ markdown:
   include_source_image: true
   include_raw_ocr: true
   default_tags: ["handwriting", "ocr", "to-review"]
+  date_folder:
+    enabled: false
+    pattern: "YYYY/MM/DD"
+    date_source: "processed_at"
+  template:
+    mode: "default"
+    file_path: ""
+    missing_behavior: "fallback"
 
 state:
   sqlite_path: "{root / '.handwriting-ocr' / 'state.sqlite'}"
@@ -222,4 +230,14 @@ dedupe:
 archive:
   after_success: "move"
   after_error: "move"
+
+index:
+  enabled: false
+  path: "Index.md"
+  title: "手写识别索引"
+  grouping: "date"
+  sort: "desc"
+  include_status: true
+  include_source_link: true
+  update_mode: "managed_block"
 """

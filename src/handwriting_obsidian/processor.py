@@ -9,7 +9,8 @@ import shutil
 import time
 
 from .config import AppConfig
-from .markdown import build_note_path, render_note, slugify
+from .index import update_index
+from .markdown import build_note_path, render_note, resolve_note_output_dir, slugify
 from .ocr import OcrEngine
 from .state import ProcessingState, StateRecord
 
@@ -133,12 +134,19 @@ def process_image(
         state.update(record_id, "processing")
 
         ocr_result = ocr_engine.recognize(image_path, language=config.ocr.language)
-        config.output_dir.mkdir(parents=True, exist_ok=True)
         created_at = datetime.now(timezone.utc)
-        note_path = build_note_path(config.output_dir, image_path.stem, created_at, image_hash)
+        note_output_dir = resolve_note_output_dir(config, image_path, created_at)
+        note_output_dir.mkdir(parents=True, exist_ok=True)
+        note_path = build_note_path(
+            note_output_dir,
+            image_path.stem,
+            created_at,
+            image_hash,
+            config.markdown.filename_template,
+        )
 
         archived_path = planned_archive_path(image_path, config.archive.after_success, config.processed_dir)
-        relative_image = relative_markdown_path(config.output_dir, archived_path)
+        relative_image = relative_markdown_path(note_output_dir, archived_path)
         markdown = render_note(
             config=config,
             title=image_path.stem,
@@ -162,7 +170,11 @@ def process_image(
             ocr_model=ocr_result.model,
             language=ocr_result.language,
         )
-        return ProcessResult(image_path=image_path, note_path=note_path, status="success", reason="processed")
+        warnings = update_index(config, state)
+        for warning in warnings:
+            print(warning, flush=True)
+        reason = "processed" if not warnings else "processed; " + "; ".join(warnings)
+        return ProcessResult(image_path=image_path, note_path=note_path, status="success", reason=reason)
     except Exception as exc:
         message = str(exc)
         try:

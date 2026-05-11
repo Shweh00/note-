@@ -85,6 +85,92 @@ tags:
 ![[../HandwritingImages/processed/meeting-notes.jpg]]
 ```
 
+### 按日期目录归档
+
+默认保持 V1 行为：Markdown 直接写入 `watch.output_dir`。开启后，新笔记会写入 `watch.output_dir/YYYY/MM/DD/` 这类日期目录，SQLite 的 `output_path` 记录最终 Markdown 路径。
+
+```yaml
+markdown:
+  filename_template: "{{date}}-{{source_basename}}.md"
+  date_folder:
+    enabled: true
+    pattern: "YYYY/MM/DD"
+    date_source: "processed_at"  # processed_at | source_mtime | source_name
+```
+
+`pattern` 支持 `YYYY`、`MM`、`DD` 和 `/`、`-`、`_`。`source_name` 会从文件名里的 `YYYY-MM-DD`、`YYYY_MM_DD` 或 `YYYYMMDD` 解析日期，解析失败时回退到处理时间。
+
+### Markdown 模板
+
+默认模板保留 V1 的 frontmatter、标题、来源图片、识别正文、原始 OCR 和处理信息。需要自定义结构时可指定 UTF-8 模板文件：
+
+```yaml
+markdown:
+  template:
+    mode: "file"
+    file_path: "handwriting-note-template.md"
+    missing_behavior: "fallback"  # fallback | fail
+```
+
+模板变量使用受限 `{{variable}}` 替换，不执行表达式。支持变量：`title`、`created_at`、`date`、`source_basename`、`source_image`、`source_hash`、`ocr_mode`、`ocr_provider`、`ocr_model`、`language`、`status`、`tags_yaml`、`recognized_markdown`、`uncertain_items`、`raw_ocr`、`processing_info`。
+
+示例：
+
+````markdown
+---
+title: "{{title}}"
+created: {{created_at}}
+status: "{{status}}"
+tags:
+{{tags_yaml}}
+---
+
+# {{title}}
+
+![[{{source_image}}]]
+
+## 识别正文
+
+{{recognized_markdown}}
+
+## 原始 OCR
+
+```text
+{{raw_ocr}}
+```
+````
+
+模板缺失或为空时，`fallback` 会使用默认模板继续处理并输出 warning；`fail` 会让本次图片处理失败，不生成空 Markdown。模板里的未知变量会原样保留并输出 warning。
+
+### 自动索引页
+
+索引默认关闭。开启后，每次成功生成新笔记都会从 SQLite 成功记录重建索引的 managed block；区块外的用户文字会保留。`index.path` 为相对 `watch.output_dir` 的路径，也可以配置绝对路径。
+
+```yaml
+index:
+  enabled: true
+  path: "Index.md"
+  title: "手写识别索引"
+  grouping: "date"  # date | flat
+  sort: "desc"      # desc | asc
+  include_status: true
+  include_source_link: true
+  update_mode: "managed_block"
+```
+
+工具只更新以下标记之间的内容：
+
+```markdown
+<!-- handwriting-ocr:index:start -->
+<!-- handwriting-ocr:index:end -->
+```
+
+重复图片被去重时不会新增笔记，也不会新增索引项。索引页不可写时，Markdown 生成仍保持成功，命令输出会包含 index warning。
+
+### V1 配置兼容
+
+旧配置文件不需要手工新增 `markdown.date_folder`、`markdown.template` 或 `index`。这些新功能默认关闭，V1 的输出目录、文件命名、去重、归档、错误处理和 OCR provider 配置继续生效。工具不会迁移、移动、重命名或覆盖已经生成的历史 Markdown；首次开启索引时，会根据 SQLite 里的成功记录生成索引。
+
 ## 在线 OCR 与隐私
 
 在线 OCR 需要配置 API key，并会把图片发送到 OpenAI Responses API。敏感内容请使用 `mock` 或本机 `tesseract` provider。基础流程不依赖在线 OCR；使用前建议先运行 `doctor`。
@@ -121,5 +207,24 @@ handwriting-ocr batch --config ~/ObsidianVault/.handwriting-ocr/config.yaml
 
 ```bash
 cd /workspace/project
-PYTHONPATH=src pytest --cov=handwriting_obsidian --cov-report=term-missing --cov-fail-under=95
+.venv/bin/pytest --cov=handwriting_obsidian --cov-report=term-missing --cov-fail-under=95
+```
+
+安装 dev 依赖并激活虚拟环境后，也可以运行：
+
+```bash
+pytest --cov=handwriting_obsidian --cov-report=term-missing --cov-fail-under=95
+```
+
+无需网络的验收流程：
+
+```bash
+tmp=/tmp/hw-vault
+rm -rf "$tmp"
+handwriting-ocr init --vault "$tmp" --force
+# 编辑 "$tmp/.handwriting-ocr/config.yaml"：开启 markdown.date_folder.enabled 和 index.enabled
+printf '会议记录\n- 今日待办' > "$tmp/Inbox/HandwritingImages/meeting.txt"
+printf 'fake image bytes' > "$tmp/Inbox/HandwritingImages/meeting.png"
+handwriting-ocr batch --config "$tmp/.handwriting-ocr/config.yaml"
+handwriting-ocr status --config "$tmp/.handwriting-ocr/config.yaml"
 ```
