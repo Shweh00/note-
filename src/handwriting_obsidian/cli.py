@@ -290,6 +290,8 @@ markdown:
 
 state:
   sqlite_path: "{root / '.handwriting-ocr' / 'state.sqlite'}"
+  # Reserved for future app-managed file logging. Long-running watch logs are
+  # currently stdout/stderr captured by systemd, launchd, or the Windows script.
   log_path: "{root / '.handwriting-ocr' / 'handwriting-ocr.log'}"
 
 dedupe:

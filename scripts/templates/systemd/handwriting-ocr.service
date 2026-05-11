@@ -1,12 +1,10 @@
 [Unit]
 Description=Handwriting OCR Obsidian watcher
-After=network-online.target
-Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=__PROJECT_DIR__
-ExecStart=__PROJECT_DIR__/.venv/bin/python -m handwriting_ocr watch --config __CONFIG_PATH__
+WorkingDirectory="__PROJECT_DIR__"
+ExecStart="__PROJECT_DIR__/.venv/bin/python" -m handwriting_ocr watch --config "__CONFIG_PATH__"
 Restart=on-failure
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1

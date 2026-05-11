@@ -137,6 +137,7 @@ handwriting-ocr watch --config ~/ObsidianVault/.handwriting-ocr/config.yaml
 - 日常运维：`doctor`、`status`、`retry-failed`、批量补处理和故障排查。
 
 可复制的模板在 `scripts/templates/` 下。后台任务使用和前台相同的配置文件；修改 OCR provider、目录或 API key 后，先运行 `doctor`，再重启服务。
+模板和手册示例支持带空格路径；替换 systemd、launchd、Windows 模板变量时请保留原有引号。后台日志以服务管理器捕获的 stdout/stderr 为准：Linux 用 `journalctl --user`，macOS/Windows 使用模板中配置的日志文件；`state.log_path` 目前只是保留配置项，不是 `watch` 的落盘日志。
 
 ## Obsidian 输出
 

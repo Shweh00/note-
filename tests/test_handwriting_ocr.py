@@ -4,10 +4,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 import json
 import os
+import shlex
 import subprocess
 import sys
 import types
 import urllib.error
+import xml.etree.ElementTree as ET
 
 import pytest
 
@@ -1169,11 +1171,12 @@ def test_daemon_runbook_and_templates_cover_supported_platforms() -> None:
         "handwriting-ocr doctor",
         "journalctl --user",
         "retry-failed",
+        "state.log_path",
     ):
         assert required in runbook
 
     templates = {
-        "scripts/templates/systemd/handwriting-ocr.service": ("ExecStart=", "__CONFIG_PATH__", "Restart=on-failure"),
+        "scripts/templates/systemd/handwriting-ocr.service": ("ExecStart=", '"__CONFIG_PATH__"', "Restart=on-failure"),
         "scripts/templates/launchd/com.example.handwriting-ocr.plist": ("ProgramArguments", "__CONFIG_PATH__", "KeepAlive"),
         "scripts/templates/windows/handwriting-ocr-watch.ps1": ("handwriting_ocr watch", "__CONFIG_PATH__", "watch.err.log"),
         "scripts/templates/windows/handwriting-ocr-watch-task.xml": ("LogonTrigger", "__SCRIPT_PATH__", "powershell.exe"),
@@ -1182,3 +1185,34 @@ def test_daemon_runbook_and_templates_cover_supported_platforms() -> None:
         content = (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
         for expected in expected_parts:
             assert expected in content
+
+
+def test_daemon_templates_and_docs_preserve_paths_with_spaces() -> None:
+    project_dir = "/home/me/Obsidian Tools/handwriting ocr"
+    config_path = "/home/me/Obsidian Vault/.handwriting-ocr/config.yaml"
+    service = (PROJECT_ROOT / "scripts/templates/systemd/handwriting-ocr.service").read_text(encoding="utf-8")
+    rendered_service = service.replace("__PROJECT_DIR__", project_dir).replace("__CONFIG_PATH__", config_path)
+
+    assert "network-online.target" not in service
+    assert f'WorkingDirectory="{project_dir}"' in rendered_service
+    exec_line = next(line for line in rendered_service.splitlines() if line.startswith("ExecStart="))
+    assert shlex.split(exec_line.removeprefix("ExecStart=")) == [
+        f"{project_dir}/.venv/bin/python",
+        "-m",
+        "handwriting_ocr",
+        "watch",
+        "--config",
+        config_path,
+    ]
+
+    task_xml = (PROJECT_ROOT / "scripts/templates/windows/handwriting-ocr-watch-task.xml").read_text(encoding="utf-8")
+    script_path = r"C:\Users\me\Obsidian Tools\handwriting-ocr-watch.ps1"
+    rendered_xml = task_xml.replace("__SCRIPT_PATH__", script_path).replace("__AUTHOR__", "me")
+    root = ET.fromstring(rendered_xml)
+    namespace = {"task": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
+    arguments = root.findtext(".//task:Arguments", namespaces=namespace)
+    assert arguments == f'-NoProfile -ExecutionPolicy Bypass -File "{script_path}"'
+
+    runbook = (PROJECT_ROOT / "docs" / "daemon-runbook.md").read_text(encoding="utf-8")
+    assert '-File `"$ScriptPath`"' in runbook
+    assert "保留模板里的引号" in runbook

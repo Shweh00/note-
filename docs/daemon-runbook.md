@@ -1,6 +1,6 @@
 # 常驻运行手册
 
-本手册说明如何把 `handwriting-ocr watch` 作为本机后台任务运行，让新增到监听目录的手写图片自动生成 Obsidian Markdown。以下示例假设项目安装在 `/workspace/project`，配置文件在 `~/ObsidianVault/.handwriting-ocr/config.yaml`。请按自己的路径替换。
+本手册说明如何把 `handwriting-ocr watch` 作为本机后台任务运行，让新增到监听目录的手写图片自动生成 Obsidian Markdown。以下示例假设项目安装在 `/workspace/project`，配置文件在 `~/ObsidianVault/.handwriting-ocr/config.yaml`。请按自己的路径替换；路径可以包含空格，但替换到模板后要保留模板里的引号。
 
 ## 运行前检查
 
@@ -44,6 +44,8 @@
    - `__PROJECT_DIR__` 为项目目录，例如 `/workspace/project`
    - `__CONFIG_PATH__` 为配置文件路径，例如 `/home/me/ObsidianVault/.handwriting-ocr/config.yaml`
 
+   模板已经给 `WorkingDirectory`、Python 可执行文件和 `--config` 参数加引号，`/home/me/Obsidian Vault/project` 这类带空格路径可直接替换。如果路径中包含字面量 `%`，在 systemd unit 中写成 `%%`。
+
 3. 启用并启动：
 
    ```bash
@@ -67,6 +69,8 @@
    ```
 
 如需开机后未登录也运行，可在有权限时执行 `loginctl enable-linger "$USER"`。
+
+默认 user service 不声明 `network-online.target`，适合本地/mock/offline OCR，也避免用户级 systemd 对系统级网络 target 的依赖差异。在线 OpenAI OCR 仍建议依靠 `doctor`、`Restart=on-failure` 和 stderr 日志排查；如果你的发行版已经为用户服务提供可用的网络 target，可按本机策略添加 override。
 
 ## macOS: launchd
 
@@ -121,7 +125,7 @@
 - `scripts/templates/windows/handwriting-ocr-watch.ps1`
 - `scripts/templates/windows/handwriting-ocr-watch-task.xml`
 
-1. 复制 PowerShell 脚本到固定位置，例如 `C:\Users\me\handwriting-ocr-watch.ps1`。
+1. 复制 PowerShell 脚本到固定位置，例如 `C:\Users\me\Obsidian Tools\handwriting-ocr-watch.ps1`。
 
 2. 编辑脚本里的路径：
 
@@ -133,20 +137,21 @@
 3. 先手动验证：
 
    ```powershell
-   powershell -ExecutionPolicy Bypass -File C:\Users\me\handwriting-ocr-watch.ps1
+   powershell -ExecutionPolicy Bypass -File "C:\Users\me\Obsidian Tools\handwriting-ocr-watch.ps1"
    ```
 
 4. 创建任务：
 
    ```powershell
-   schtasks /Create /TN "Handwriting OCR Watch" /SC ONLOGON /RL LIMITED /F /TR "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\me\handwriting-ocr-watch.ps1"
+   $ScriptPath = "C:\Users\me\Obsidian Tools\handwriting-ocr-watch.ps1"
+   schtasks /Create /TN "Handwriting OCR Watch" /SC ONLOGON /RL LIMITED /F /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
    schtasks /Run /TN "Handwriting OCR Watch"
    ```
 
-   如果需要 XML 导入，先替换 `handwriting-ocr-watch-task.xml` 里的 `__SCRIPT_PATH__` 和 `__AUTHOR__`，然后运行：
+   如果需要 XML 导入，先替换 `handwriting-ocr-watch-task.xml` 里的 `__SCRIPT_PATH__` 和 `__AUTHOR__`。XML 模板已经给 `__SCRIPT_PATH__` 加引号，适合带空格路径。然后运行：
 
    ```powershell
-   schtasks /Create /TN "Handwriting OCR Watch" /XML C:\Users\me\handwriting-ocr-watch-task.xml /F
+   schtasks /Create /TN "Handwriting OCR Watch" /XML "C:\Users\me\Obsidian Tools\handwriting-ocr-watch-task.xml" /F
    ```
 
 5. 查看状态、停止、重启和删除：
@@ -170,6 +175,7 @@
   - Linux systemd user: `journalctl --user -u handwriting-ocr.service`
   - macOS launchd: `~/Library/Logs/handwriting-ocr/watch.log` 和 `watch.err.log`
   - Windows: PowerShell 脚本里的 `$LogDir`
+  - `state.log_path` 是保留的应用日志配置项；当前 `watch` 写入 stdout/stderr，由上面的服务管理器或包装脚本负责落盘。
 
 ## 故障排查
 
