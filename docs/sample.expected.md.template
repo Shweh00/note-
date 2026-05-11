@@ -1,0 +1,42 @@
+---
+sample_id: "2026-05-11_001_zh_meeting_clear"
+image_file: "2026-05-11_001_zh_meeting_clear.jpg"
+language: "zh-cn"
+scenario: "meeting"
+quality_tags:
+  - clear
+  - lined-paper
+expected_character_count: 80
+privacy_checked: false
+---
+
+# Expected OCR Reference
+
+## expected_text
+
+在这里填写人工转写文本。保留原始换行、列表层级和关键标点。
+
+- 示例待办 1
+- 示例待办 2
+
+## must_include
+
+- "会议"
+- "待办"
+- "2026-05-11"
+
+## acceptable_variants
+
+- "TODO" may appear as "To Do" or "待办".
+- Full-width and half-width punctuation are both acceptable.
+- Simplified/traditional Chinese variants are acceptable when meaning is unchanged.
+
+## ignore_regions
+
+- Page corner shadows.
+- Decorative doodles that are not part of the notes.
+- Crossed-out text marked as deleted.
+
+## notes_for_reviewer
+
+Use this file as the human reference when comparing generated Markdown. Mark a sample as failed when required numbers, dates, names, or checklist items are missing or materially wrong.

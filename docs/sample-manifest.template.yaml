@@ -1,0 +1,236 @@
+dataset:
+  id: "real-handwriting-min18-YYYYMMDD"
+  version: 1
+  owner: "dev"
+  privacy_level: "redacted-local-only"
+  created_at: "YYYY-MM-DD"
+  image_dir: "Inbox/HandwritingImages/real-samples"
+  expected_dir: ".handwriting-ocr/real-samples/expected"
+  config_path: ".handwriting-ocr/config.yaml"
+  notes: "Do not commit real images or expected text to the repository."
+
+validation:
+  minimum_sample_count: 18
+  allowed_extensions: ["jpg", "jpeg", "png"]
+  required_commands:
+    - "handwriting-ocr doctor --config \"$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml\""
+    - "handwriting-ocr batch --config \"$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml\""
+    - "handwriting-ocr status --config \"$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml\""
+  reviewer: "api-tester"
+
+samples:
+  - sample_id: "2026-05-11_001_zh_meeting_clear"
+    image_file: "2026-05-11_001_zh_meeting_clear.jpg"
+    image_sha256: "TODO"
+    expected_file: "expected/2026-05-11_001_zh_meeting_clear.expected.md"
+    language: "zh-cn"
+    scenario: "meeting"
+    quality_tags: ["clear", "lined-paper"]
+    expected_character_count: 80
+    must_include: ["会议", "待办"]
+    review_priority: "p0"
+    privacy_checked: false
+
+  - sample_id: "2026-05-11_002_zh_todo_faint"
+    image_file: "2026-05-11_002_zh_todo_faint.jpg"
+    image_sha256: "TODO"
+    expected_file: "expected/2026-05-11_002_zh_todo_faint.expected.md"
+    language: "zh-cn"
+    scenario: "todo"
+    quality_tags: ["faint", "checklist"]
+    expected_character_count: 50
+    must_include: ["TODO", "优先"]
+    review_priority: "p0"
+    privacy_checked: false
+
+  - sample_id: "2026-05-11_003_zh_diary_tilted"
+    image_file: "2026-05-11_003_zh_diary_tilted.jpg"
+    image_sha256: "TODO"
+    expected_file: "expected/2026-05-11_003_zh_diary_tilted.expected.md"
+    language: "zh-cn"
+    scenario: "diary"
+    quality_tags: ["tilted", "paragraph"]
+    expected_character_count: 100
+    must_include: ["今天", "记录"]
+    review_priority: "p1"
+    privacy_checked: false
+
+  - sample_id: "2026-05-11_004_zh_vertical_note"
+    image_file: "2026-05-11_004_zh_vertical_note.jpg"
+    image_sha256: "TODO"
+    expected_file: "expected/2026-05-11_004_zh_vertical_note.expected.md"
+    language: "zh-cn"
+    scenario: "vertical-note"
+    quality_tags: ["vertical", "layout"]
+    expected_character_count: 40
+    must_include: ["标题"]
+    review_priority: "p1"
+    privacy_checked: false
+
+  - sample_id: "2026-05-11_005_en_notes_clear"
+    image_file: "2026-05-11_005_en_notes_clear.jpg"
+    image_sha256: "TODO"
+    expected_file: "expected/2026-05-11_005_en_notes_clear.expected.md"
+    language: "en"
+    scenario: "notes"
+    quality_tags: ["clear", "english"]
+    expected_character_count: 120
+    must_include: ["summary", "next step"]
+    review_priority: "p1"
+    privacy_checked: false
+
+  - sample_id: "2026-05-11_006_mixed_bilingual_clear"
+    image_file: "2026-05-11_006_mixed_bilingual_clear.jpg"
+    image_sha256: "TODO"
+    expected_file: "expected/2026-05-11_006_mixed_bilingual_clear.expected.md"
+    language: "zh-cn,en"
+    scenario: "bilingual"
+    quality_tags: ["mixed-language", "clear"]
+    expected_character_count: 80
+    must_include: ["API", "复盘"]
+    review_priority: "p0"
+    privacy_checked: false
+
+  - sample_id: "2026-05-11_007_num_math_grid"
+    image_file: "2026-05-11_007_num_math_grid.jpg"
+    image_sha256: "TODO"
+    expected_file: "expected/2026-05-11_007_num_math_grid.expected.md"
+    language: "zh-cn,en"
+    scenario: "math"
+    quality_tags: ["numbers", "symbols", "grid"]
+    expected_character_count: 40
+    must_include: ["42", "%"]
+    review_priority: "p0"
+    privacy_checked: false
+
+  - sample_id: "2026-05-11_008_table_schedule"
+    image_file: "2026-05-11_008_table_schedule.jpg"
+    image_sha256: "TODO"
+    expected_file: "expected/2026-05-11_008_table_schedule.expected.md"
+    language: "zh-cn"
+    scenario: "schedule-table"
+    quality_tags: ["table", "grid"]
+    expected_character_count: 60
+    must_include: ["时间", "事项"]
+    review_priority: "p0"
+    privacy_checked: false
+
+  - sample_id: "2026-05-11_009_receipt_amounts"
+    image_file: "2026-05-11_009_receipt_amounts.jpg"
+    image_sha256: "TODO"
+    expected_file: "expected/2026-05-11_009_receipt_amounts.expected.md"
+    language: "zh-cn"
+    scenario: "receipt"
+    quality_tags: ["amounts", "dates"]
+    expected_character_count: 60
+    must_include: ["合计", "¥"]
+    review_priority: "p0"
+    privacy_checked: false
+
+  - sample_id: "2026-05-11_010_contact_fake"
+    image_file: "2026-05-11_010_contact_fake.jpg"
+    image_sha256: "TODO"
+    expected_file: "expected/2026-05-11_010_contact_fake.expected.md"
+    language: "zh-cn,en"
+    scenario: "fake-contact"
+    quality_tags: ["redacted", "contact-format"]
+    expected_character_count: 60
+    must_include: ["example.com", "13800000000"]
+    review_priority: "p1"
+    privacy_checked: false
+
+  - sample_id: "2026-05-11_011_mindmap_arrows"
+    image_file: "2026-05-11_011_mindmap_arrows.jpg"
+    image_sha256: "TODO"
+    expected_file: "expected/2026-05-11_011_mindmap_arrows.expected.md"
+    language: "zh-cn"
+    scenario: "mindmap"
+    quality_tags: ["arrows", "hierarchy"]
+    expected_character_count: 50
+    must_include: ["目标", "行动"]
+    review_priority: "p1"
+    privacy_checked: false
+
+  - sample_id: "2026-05-11_012_mixed_recipe_shadow"
+    image_file: "2026-05-11_012_mixed_recipe_shadow.png"
+    image_sha256: "TODO"
+    expected_file: "expected/2026-05-11_012_mixed_recipe_shadow.expected.md"
+    language: "zh-cn,en"
+    scenario: "recipe"
+    quality_tags: ["shadow", "quantities"]
+    expected_character_count: 80
+    must_include: ["步骤", "g"]
+    review_priority: "p1"
+    privacy_checked: false
+
+  - sample_id: "2026-05-11_013_sticky_note_small"
+    image_file: "2026-05-11_013_sticky_note_small.jpg"
+    image_sha256: "TODO"
+    expected_file: "expected/2026-05-11_013_sticky_note_small.expected.md"
+    language: "zh-cn"
+    scenario: "sticky-note"
+    quality_tags: ["small-paper", "short-text"]
+    expected_character_count: 20
+    must_include: ["提醒"]
+    review_priority: "p2"
+    privacy_checked: false
+
+  - sample_id: "2026-05-11_014_crowded_page"
+    image_file: "2026-05-11_014_crowded_page.jpg"
+    image_sha256: "TODO"
+    expected_file: "expected/2026-05-11_014_crowded_page.expected.md"
+    language: "zh-cn"
+    scenario: "crowded-notes"
+    quality_tags: ["crowded", "dense"]
+    expected_character_count: 160
+    must_include: ["摘要", "问题"]
+    review_priority: "p1"
+    privacy_checked: false
+
+  - sample_id: "2026-05-11_015_crossed_out"
+    image_file: "2026-05-11_015_crossed_out.jpg"
+    image_sha256: "TODO"
+    expected_file: "expected/2026-05-11_015_crossed_out.expected.md"
+    language: "zh-cn"
+    scenario: "revision"
+    quality_tags: ["crossed-out", "correction"]
+    expected_character_count: 50
+    must_include: ["改为"]
+    review_priority: "p1"
+    privacy_checked: false
+
+  - sample_id: "2026-05-11_016_blue_ink_low_contrast"
+    image_file: "2026-05-11_016_blue_ink_low_contrast.jpg"
+    image_sha256: "TODO"
+    expected_file: "expected/2026-05-11_016_blue_ink_low_contrast.expected.md"
+    language: "zh-cn"
+    scenario: "low-contrast"
+    quality_tags: ["blue-ink", "low-contrast"]
+    expected_character_count: 60
+    must_include: ["蓝色", "重点"]
+    review_priority: "p1"
+    privacy_checked: false
+
+  - sample_id: "2026-05-11_017_photo_angle"
+    image_file: "2026-05-11_017_photo_angle.jpg"
+    image_sha256: "TODO"
+    expected_file: "expected/2026-05-11_017_photo_angle.expected.md"
+    language: "zh-cn"
+    scenario: "angled-photo"
+    quality_tags: ["perspective", "paper-edge"]
+    expected_character_count: 60
+    must_include: ["角度", "边缘"]
+    review_priority: "p2"
+    privacy_checked: false
+
+  - sample_id: "2026-05-11_018_multi_page_marker"
+    image_file: "2026-05-11_018_multi_page_marker.jpg"
+    image_sha256: "TODO"
+    expected_file: "expected/2026-05-11_018_multi_page_marker.expected.md"
+    language: "zh-cn,en"
+    scenario: "page-marker"
+    quality_tags: ["page-number", "continuation"]
+    expected_character_count: 60
+    must_include: ["Page 1/2", "续"]
+    review_priority: "p2"
+    privacy_checked: false

@@ -139,6 +139,15 @@ handwriting-ocr watch --config ~/ObsidianVault/.handwriting-ocr/config.yaml
 可复制的模板在 `scripts/templates/` 下。后台任务使用和前台相同的配置文件；修改 OCR provider、目录或 API key 后，先运行 `doctor`，再重启服务。
 模板和手册示例支持带空格路径；替换 systemd、launchd、Windows 模板变量时请保留原有引号。后台日志以服务管理器捕获的 stdout/stderr 为准：Linux 用 `journalctl --user`，macOS/Windows 使用模板中配置的日志文件；`state.log_path` 目前只是保留配置项，不是 `watch` 的落盘日志。
 
+## 真实手写样例集
+
+需要用真实手写图片复验 OCR 质量时，请按 [真实手写样例集准备指南](docs/real-handwriting-sample-kit.md) 准备脱敏样例。指南包含 18 张最小样例覆盖清单、隐私脱敏要求、命名规则、参考文本格式、放置路径和 api-tester 复验命令。
+
+可复制模板：
+
+- [sample-manifest.template.yaml](docs/sample-manifest.template.yaml)
+- [sample.expected.md.template](docs/sample.expected.md.template)
+
 ## Obsidian 输出
 
 每张图片生成一篇 Markdown，包含 YAML frontmatter、Obsidian 图片嵌入、识别正文、可能不确定内容、原始 OCR 和处理信息。默认状态是 `to-review`，方便人工校对。
