@@ -36,6 +36,20 @@ $HW_SAMPLE_VAULT/.handwriting-ocr/real-samples/expected/<sample_id>.expected.md
 
 复验前把配置里的 `watch.input_dir` 临时改为绝对路径 `$HW_SAMPLE_VAULT/Inbox/HandwritingImages/real-samples`。如果手动编辑 YAML 时不展开环境变量，也可以写成相对配置文件目录的 `../Inbox/HandwritingImages/real-samples`，因为配置文件位于 `$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml`。如需隔离归档，也把 `watch.processed_dir` 和 `watch.error_dir` 指向真实样例目录下的 `_processed`、`_errors`；否则可把 18 张图片复制到默认 `Inbox/HandwritingImages/`。为了避免 mock sidecar 影响真实 OCR，真实样例目录内不要放同名 `.txt`。
 
+准备完成后先运行准入校验。校验会检查 `sample-manifest.yaml`、18 张图片、命名规则、18 个 `.expected.md` 文件、manifest 与 expected frontmatter 的 `privacy_checked: true`、图片 SHA-256，以及配置里的 `watch.input_dir` 是否指向样例图片目录：
+
+```bash
+handwriting-ocr validate-samples --config "$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml"
+```
+
+如果 manifest 不在默认位置，也可以显式传入：
+
+```bash
+handwriting-ocr validate-samples \
+  --config "$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml" \
+  --manifest "$HW_SAMPLE_VAULT/.handwriting-ocr/real-samples/sample-manifest.yaml"
+```
+
 ## 隐私脱敏
 
 样例必须先脱敏再进入测试目录：
@@ -91,7 +105,7 @@ YYYY-MM-DD_NNN_<lang>_<scenario>_<quality>.<ext>
 | 009 | `num_receipt_amounts` | 金额、日期 | 虚构消费记录和合计 |
 | 010 | `mixed_contact_redacted` | 脱敏联系人格式 | 假姓名、假电话、假邮箱 |
 | 011 | `zh_mindmap_arrows` | 箭头和层级 | 简单脑图或流程 |
-| 012 | `recipe_shadow` | 阴影和多行 | 配方、数量、步骤 |
+| 012 | `mixed_recipe_shadow` | 阴影和多行 | 配方、数量、步骤 |
 | 013 | `zh_sticky_small` | 小纸张低分辨率 | 便签短句 |
 | 014 | `zh_notes_crowded` | 密集排版 | 多行压缩笔记 |
 | 015 | `zh_revision_crossed` | 划掉和修改 | 被划掉文本、改写文本 |
@@ -141,11 +155,14 @@ cd /workspace/project
 export HW_SAMPLE_VAULT=/tmp/hw-real-sample-vault
 
 handwriting-ocr doctor --config "$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml"
+handwriting-ocr validate-samples --config "$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml"
 handwriting-ocr batch --config "$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml"
 handwriting-ocr status --config "$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml"
 ```
 
-最小文件完整性检查：
+`validate-samples` 成功时退出码为 `0` 并输出 `sample validation: OK`；发现准入问题时退出码为 `2` 并逐条输出 `error:`，适合 api-tester 在真实 OCR 前先拒收不完整样例集。
+
+如果需要手工排查目录数量，也可以运行：
 
 ```bash
 test -f "$HW_SAMPLE_VAULT/.handwriting-ocr/real-samples/sample-manifest.yaml"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from hashlib import sha256
 from pathlib import Path
 import json
 import os
@@ -26,6 +27,7 @@ from handwriting_obsidian.processor import (
     retry_failed,
     wait_until_stable,
 )
+from handwriting_obsidian.sample_validator import validate_sample_vault
 from handwriting_obsidian.state import ProcessingState
 
 
@@ -1216,3 +1218,283 @@ def test_daemon_templates_and_docs_preserve_paths_with_spaces() -> None:
     runbook = (PROJECT_ROOT / "docs" / "daemon-runbook.md").read_text(encoding="utf-8")
     assert '-File `"$ScriptPath`"' in runbook
     assert "保留模板里的引号" in runbook
+
+
+def write_sample_vault(tmp_path: Path) -> tuple[Path, Path]:
+    vault = tmp_path / "sample-vault"
+    image_dir = vault / "Inbox" / "HandwritingImages" / "real-samples"
+    expected_dir = vault / ".handwriting-ocr" / "real-samples" / "expected"
+    image_dir.mkdir(parents=True)
+    expected_dir.mkdir(parents=True)
+    config_path = vault / ".handwriting-ocr" / "config.yaml"
+    config_path.write_text(
+        f"""
+watch:
+  input_dir: "{image_dir}"
+  output_dir: "{vault / 'Inbox' / 'HandwritingNotes'}"
+  processed_dir: "{image_dir / '_processed'}"
+  error_dir: "{image_dir / '_errors'}"
+  settle_seconds: 1
+  recursive: false
+  polling: true
+
+ocr:
+  mode: "mock"
+  provider: "mock"
+
+state:
+  sqlite_path: "{vault / '.handwriting-ocr' / 'state.sqlite'}"
+""",
+        encoding="utf-8",
+    )
+    samples = []
+    scenarios = [
+        ("zh", "meeting", "clear", "jpg"),
+        ("zh", "todo", "faint", "jpg"),
+        ("zh", "diary", "tilted", "jpg"),
+        ("zh", "vertical", "layout", "jpg"),
+        ("en", "notes", "clear", "jpg"),
+        ("mixed", "bilingual", "clear", "jpg"),
+        ("num", "math", "grid", "jpg"),
+        ("zh", "schedule", "table", "jpg"),
+        ("num", "receipt", "amounts", "jpg"),
+        ("mixed", "contact", "redacted", "jpg"),
+        ("zh", "mindmap", "arrows", "jpg"),
+        ("mixed", "recipe", "shadow", "png"),
+        ("zh", "sticky", "small", "jpg"),
+        ("zh", "notes", "crowded", "jpg"),
+        ("zh", "revision", "crossed", "jpg"),
+        ("zh", "contrast", "faint", "jpg"),
+        ("zh", "photo", "tilted", "jpg"),
+        ("mixed", "pages", "marker", "jpg"),
+    ]
+    for number, (lang, scenario, quality, ext) in enumerate(scenarios, start=1):
+        sample_id = f"2026-05-11_{number:03d}_{lang}_{scenario}_{quality}"
+        image_file = f"{sample_id}.{ext}"
+        image_bytes = f"fake image {number}".encode()
+        (image_dir / image_file).write_bytes(image_bytes)
+        digest = sha256(image_bytes).hexdigest()
+        expected_file = f"expected/{sample_id}.expected.md"
+        (expected_dir / f"{sample_id}.expected.md").write_text(
+            f"""---
+sample_id: "{sample_id}"
+image_file: "{image_file}"
+language: "{lang}"
+scenario: "{scenario}"
+quality_tags: ["{quality}"]
+privacy_checked: true
+---
+
+expected_text:
+  sample {number} redacted text
+""",
+            encoding="utf-8",
+        )
+        samples.append(
+            f"""  - sample_id: "{sample_id}"
+    image_file: "{image_file}"
+    image_sha256: "{digest}"
+    expected_file: "{expected_file}"
+    language: "{lang}"
+    scenario: "{scenario}"
+    quality_tags: ["{quality}"]
+    expected_character_count: 20
+    must_include: ["sample"]
+    review_priority: "p1"
+    privacy_checked: true
+"""
+        )
+    manifest_path = vault / ".handwriting-ocr" / "real-samples" / "sample-manifest.yaml"
+    manifest_path.write_text(
+        """dataset:
+  id: "real-handwriting-min18-20260511"
+  version: 1
+  owner: "dev"
+  privacy_level: "redacted-local-only"
+  created_at: "2026-05-11"
+  image_dir: "Inbox/HandwritingImages/real-samples"
+  expected_dir: ".handwriting-ocr/real-samples/expected"
+  config_path: ".handwriting-ocr/config.yaml"
+
+validation:
+  minimum_sample_count: 18
+  allowed_extensions: ["jpg", "jpeg", "png"]
+  required_privacy_checked: true
+
+samples:
+"""
+        + "\n".join(samples),
+        encoding="utf-8",
+    )
+    return config_path, manifest_path
+
+
+def test_validate_samples_cli_accepts_complete_real_sample_vault(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path, manifest_path = write_sample_vault(tmp_path)
+
+    assert main(["validate-samples", "--config", str(config_path)]) == 0
+    assert main(["validate-samples", "--config", str(config_path), "--manifest", str(manifest_path)]) == 0
+    output = capsys.readouterr().out
+    assert "sample validation: OK" in output
+
+
+def test_validate_samples_cli_rejects_admission_failures(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path, manifest_path = write_sample_vault(tmp_path)
+    vault = tmp_path / "sample-vault"
+    bad_image = vault / "Inbox" / "HandwritingImages" / "real-samples" / "2026-05-11_001_zh_meeting_clear.jpg"
+    bad_image.write_bytes(b"changed")
+    stray = vault / "Inbox" / "HandwritingImages" / "real-samples" / "2026-05-11_019_zh_extra_clear.jpg"
+    stray.write_bytes(b"extra")
+    expected = (
+        vault
+        / ".handwriting-ocr"
+        / "real-samples"
+        / "expected"
+        / "2026-05-11_002_zh_todo_faint.expected.md"
+    )
+    expected.write_text(expected.read_text(encoding="utf-8").replace("privacy_checked: true", "privacy_checked: false"), encoding="utf-8")
+    (
+        vault
+        / ".handwriting-ocr"
+        / "real-samples"
+        / "expected"
+        / "2026-05-11_019_zh_extra_clear.expected.md"
+    ).write_text("---\nprivacy_checked: true\n---\n", encoding="utf-8")
+    manifest_text = manifest_path.read_text(encoding="utf-8")
+    manifest_text = manifest_text.replace('privacy_checked: true', 'privacy_checked: false', 1)
+    manifest_text = manifest_text.replace('image_file: "2026-05-11_003_zh_diary_tilted.jpg"', 'image_file: "bad-name.jpg"', 1)
+    manifest_path.write_text(manifest_text, encoding="utf-8")
+
+    assert main(["validate-samples", "--config", str(config_path), "--manifest", str(manifest_path)]) == 2
+    output = capsys.readouterr().out
+    assert "sample validation: FAIL" in output
+    assert "privacy_checked must be true" in output
+    assert "image_sha256 mismatch" in output
+    assert "image_file must match" in output
+    assert "expected_file frontmatter privacy_checked must be true" in output
+    assert "image directory must contain exactly 18 images, got 19" in output
+    assert "files not listed in manifest" in output
+    assert "expected directory must contain exactly 18 .expected.md files, got 19" in output
+
+
+def test_validate_sample_vault_handles_missing_and_malformed_manifest(tmp_path: Path) -> None:
+    config_path = write_config(tmp_path)
+    config = load_config(config_path)
+    missing = validate_sample_vault(config, tmp_path / "missing.yaml")
+    assert not missing.ok
+    assert "manifest not found" in missing.errors[0]
+
+    malformed = tmp_path / "malformed.yaml"
+    malformed.write_text("- not a mapping\n", encoding="utf-8")
+    result = validate_sample_vault(config, malformed)
+    assert not result.ok
+    assert result.errors == ["manifest root must be a mapping"]
+
+    invalid_yaml = tmp_path / "invalid.yaml"
+    invalid_yaml.write_text("dataset: [\n", encoding="utf-8")
+    result = validate_sample_vault(config, invalid_yaml)
+    assert not result.ok
+    assert "manifest could not be parsed" in result.errors[0]
+
+
+def test_validate_sample_vault_reports_manifest_shape_errors(tmp_path: Path) -> None:
+    config_path = write_config(tmp_path)
+    config = load_config(config_path)
+    manifest = tmp_path / "shape.yaml"
+    manifest.write_text(
+        """
+dataset: "bad"
+validation:
+  minimum_sample_count: 18
+  allowed_extensions: ["gif"]
+samples: "bad"
+""",
+        encoding="utf-8",
+    )
+
+    result = validate_sample_vault(config, manifest)
+
+    assert not result.ok
+    assert "dataset must be a mapping" in result.errors
+    assert "samples must be a list" in result.errors
+    assert any("samples must contain exactly 18 entries" in error for error in result.errors)
+    assert any("watch.input_dir must match dataset.image_dir" in error for error in result.errors)
+    assert any("dataset.expected_dir does not exist" in error for error in result.errors)
+
+
+def test_validate_sample_vault_reports_sample_field_errors_and_expected_warnings(tmp_path: Path) -> None:
+    image_dir = tmp_path / "images"
+    expected_dir = tmp_path / "expected"
+    image_dir.mkdir()
+    expected_dir.mkdir()
+    sample_id = "2026-05-11_001_zh_meeting_clear"
+    image_file = f"{sample_id}.jpg"
+    (image_dir / image_file).write_bytes(b"image")
+    (expected_dir / f"{sample_id}.expected.md").write_text(
+        f"""---
+sample_id: "wrong"
+image_file: "{image_file}"
+privacy_checked: true
+---
+""",
+        encoding="utf-8",
+    )
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        f"""
+dataset:
+  image_dir: "{image_dir}"
+  expected_dir: "{expected_dir}"
+validation:
+  minimum_sample_count: 2
+  allowed_extensions: ["jpg"]
+samples:
+  - "not a mapping"
+  - sample_id: "{sample_id}"
+    image_file: "2026-05-11_001_zh_other_clear.jpg"
+    image_sha256: "bad"
+    expected_file: "expected/wrong.expected.md"
+    privacy_checked: true
+""",
+        encoding="utf-8",
+    )
+    config = load_config(write_config(tmp_path / "config-root"))
+
+    result = validate_sample_vault(config, manifest)
+
+    assert not result.ok
+    assert "samples[1] must be a mapping" in result.errors
+    assert any("image_file basename must equal sample_id" in error for error in result.errors)
+    assert any("expected_file must be expected/2026-05-11_001_zh_meeting_clear.expected.md" in error for error in result.errors)
+    assert any("image_file is missing" in error for error in result.errors)
+    assert any("expected_file is missing" in error for error in result.errors)
+
+    manifest.write_text(
+        f"""
+dataset:
+  image_dir: "{image_dir}"
+  expected_dir: "{expected_dir}"
+validation:
+  minimum_sample_count: 1
+  allowed_extensions: ["jpg"]
+samples:
+  - sample_id: "{sample_id}"
+    image_file: "{image_file}"
+    image_sha256: "bad"
+    expected_file: "{expected_dir / f'{sample_id}.expected.md'}"
+    privacy_checked: true
+""",
+        encoding="utf-8",
+    )
+
+    result = validate_sample_vault(load_config(write_config(tmp_path / "config-root-2")), manifest)
+
+    assert not result.ok
+    assert any("image_sha256 must be a 64-character" in error for error in result.errors)
+    assert any("frontmatter sample_id must be" in error for error in result.errors)
+    assert result.warnings
+    assert "expected_text section marker" in result.warnings[0]

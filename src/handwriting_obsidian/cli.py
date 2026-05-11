@@ -12,6 +12,7 @@ import sys
 from .config import AppConfig, load_config
 from .ocr import configured_paddle_model_dirs, create_ocr_engine, missing_required_paddle_model_dirs
 from .processor import process_batch, retry_failed, watch
+from .sample_validator import validate_sample_vault
 from .state import ProcessingState
 
 
@@ -32,6 +33,17 @@ def build_parser() -> ArgumentParser:
     ):
         sub = subparsers.add_parser(name, help=help_text)
         sub.add_argument("--config", default="config.yaml", help="Path to YAML/TOML config.")
+
+    validate_parser = subparsers.add_parser(
+        "validate-samples",
+        help="Validate a real handwriting sample vault and sample-manifest.yaml before OCR acceptance.",
+    )
+    validate_parser.add_argument("--config", default="config.yaml", help="Path to YAML/TOML config.")
+    validate_parser.add_argument(
+        "--manifest",
+        default=None,
+        help="Path to sample-manifest.yaml. Defaults to <config-dir>/real-samples/sample-manifest.yaml.",
+    )
 
     init_config_parser = subparsers.add_parser("init-config", help="Compatibility alias for creating config.yaml.")
     init_config_parser.add_argument("--output", default="config.yaml")
@@ -101,6 +113,23 @@ def run_doctor(config_path: str) -> int:
     return 1 if failed else 0
 
 
+def run_validate_samples(config_path: str, manifest_path: str | None) -> int:
+    config_file = Path(config_path).expanduser().resolve()
+    config = load_config(config_file)
+    manifest = Path(manifest_path).expanduser().resolve() if manifest_path else config_file.parent / "real-samples" / "sample-manifest.yaml"
+    result = validate_sample_vault(config, manifest)
+    print(f"manifest: {result.manifest_path}")
+    for warning in result.warnings:
+        print(f"warning: {warning}")
+    if result.ok:
+        print("sample validation: OK")
+        return 0
+    print("sample validation: FAIL")
+    for error in result.errors:
+        print(f"error: {error}")
+    return 2
+
+
 def init_vault(vault: str, force: bool) -> int:
     root = Path(vault).expanduser().resolve()
     config_dir = root / ".handwriting-ocr"
@@ -140,6 +169,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_retry_failed(args.config)
         if args.command == "doctor":
             return run_doctor(args.config)
+        if args.command == "validate-samples":
+            return run_validate_samples(args.config, args.manifest)
         if args.command == "init":
             return init_vault(args.vault, args.force)
         if args.command == "init-config":

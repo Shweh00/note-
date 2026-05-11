@@ -145,6 +145,14 @@ handwriting-ocr watch --config ~/ObsidianVault/.handwriting-ocr/config.yaml
 
 需要用真实手写图片复验 OCR 质量时，请按 [真实手写样例集准备指南](docs/real-handwriting-sample-kit.md) 准备脱敏样例。指南包含 18 张最小样例覆盖清单、隐私脱敏要求、命名规则、参考文本格式、放置路径和 api-tester 复验命令。
 
+样例集进入 OCR 复验前先运行准入校验：
+
+```bash
+handwriting-ocr validate-samples --config "$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml"
+```
+
+该命令校验 `sample-manifest.yaml`、18 张图片、命名规则、18 个 `.expected.md` 文件、`privacy_checked: true`、`image_sha256` 和 `watch.input_dir`。成功退出码为 `0`；发现准入问题时退出码为 `2` 并输出逐条 `error:`。
+
 可复制模板：
 
 - [sample-manifest.template.yaml](docs/sample-manifest.template.yaml)
