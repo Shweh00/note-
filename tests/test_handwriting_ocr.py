@@ -143,6 +143,27 @@ def test_retry_failed_processes_error_archived_file(tmp_path: Path) -> None:
     assert counts["success"] == 1
 
 
+def test_markdown_write_failure_marks_same_record_failed_before_success_archive(tmp_path: Path) -> None:
+    config_path = write_config(tmp_path)
+    config = load_config(config_path)
+    config.output_dir.parent.mkdir(parents=True, exist_ok=True)
+    config.output_dir.write_text("not a directory", encoding="utf-8")
+    image = tmp_path / "incoming" / "write-fails.png"
+    image.write_bytes(b"image")
+
+    results = process_batch(config, MockOcrEngine("recognized before write failure"))
+
+    assert [result.status for result in results] == ["failed"]
+    assert not (config.processed_dir / "write-fails.png").exists()
+    assert (config.error_dir / "write-fails.png").exists()
+    with ProcessingState.open(config.state_path) as state:
+        counts = state.counts()
+        failures = state.recent_failures()
+    assert counts["failed"] == 1
+    assert counts["processing"] == 0
+    assert "File exists" in (failures[0].error_message or "")
+
+
 def test_cli_status_doctor_retry_and_init(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     config_path = write_config(tmp_path)
     image = tmp_path / "incoming" / "cli.png"

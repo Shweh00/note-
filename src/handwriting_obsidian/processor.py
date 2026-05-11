@@ -57,15 +57,20 @@ def relative_markdown_path(from_dir: Path, target: Path) -> str:
 
 
 def archive_image(image_path: Path, config: AppConfig, action: str, target_dir: Path) -> Path:
-    if action == "keep":
-        return image_path
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target = _unique_path(target_dir / image_path.name)
+    target = planned_archive_path(image_path, action, target_dir)
     if action == "copy":
         shutil.copy2(image_path, target)
     elif action == "move":
         shutil.move(str(image_path), str(target))
-    else:
+    return target
+
+
+def planned_archive_path(image_path: Path, action: str, target_dir: Path) -> Path:
+    if action == "keep":
+        return image_path
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = _unique_path(target_dir / image_path.name)
+    if action not in {"copy", "move"}:
         raise ValueError(f"Unsupported archive action: {action}")
     return target
 
@@ -103,7 +108,7 @@ def process_image(
         created_at = datetime.now(timezone.utc)
         note_path = build_note_path(config.output_dir, image_path.stem, created_at, image_hash)
 
-        archived_path = archive_image(image_path, config, config.archive.after_success, config.processed_dir)
+        archived_path = planned_archive_path(image_path, config.archive.after_success, config.processed_dir)
         relative_image = relative_markdown_path(config.output_dir, archived_path)
         markdown = render_note(
             config=config,
@@ -117,6 +122,7 @@ def process_image(
         tmp_path = note_path.with_suffix(note_path.suffix + ".tmp")
         tmp_path.write_text(markdown, encoding="utf-8")
         tmp_path.replace(note_path)
+        archived_path = archive_image(image_path, config, config.archive.after_success, config.processed_dir)
 
         state.update(
             record_id,
