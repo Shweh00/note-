@@ -120,6 +120,24 @@ handwriting-ocr doctor --config ~/ObsidianVault/.handwriting-ocr/config.yaml
 
 `batch` 处理现有图片；`watch` 持续轮询新增图片，并在文件大小和 mtime 连续稳定后才处理，按 `Ctrl+C` 停止；`status` 显示 SQLite 中的成功、失败、重复和最近失败；`retry-failed` 重新处理失败记录；`doctor` 检查目录、SQLite、OCR 凭据、本机命令、语言包和离线模型配置。
 
+## 后台常驻与开机自启
+
+把工具长期作为本机后台任务运行时，推荐先前台验证：
+
+```bash
+handwriting-ocr doctor --config ~/ObsidianVault/.handwriting-ocr/config.yaml
+handwriting-ocr watch --config ~/ObsidianVault/.handwriting-ocr/config.yaml
+```
+
+确认新增图片能生成 Markdown 后，再按 [常驻运行手册](docs/daemon-runbook.md) 配置后台服务。手册覆盖：
+
+- Linux `systemd --user`：启动、开机自启、`journalctl` 日志、停止和重启。
+- macOS `launchd`：登录启动、日志文件、停止和重启。
+- Windows Task Scheduler：登录启动、PowerShell 包装脚本、日志、停止和重启。
+- 日常运维：`doctor`、`status`、`retry-failed`、批量补处理和故障排查。
+
+可复制的模板在 `scripts/templates/` 下。后台任务使用和前台相同的配置文件；修改 OCR provider、目录或 API key 后，先运行 `doctor`，再重启服务。
+
 ## Obsidian 输出
 
 每张图片生成一篇 Markdown，包含 YAML frontmatter、Obsidian 图片嵌入、识别正文、可能不确定内容、原始 OCR 和处理信息。默认状态是 `to-review`，方便人工校对。

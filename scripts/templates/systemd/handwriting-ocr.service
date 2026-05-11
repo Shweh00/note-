@@ -1,0 +1,17 @@
+[Unit]
+Description=Handwriting OCR Obsidian watcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__PROJECT_DIR__
+ExecStart=__PROJECT_DIR__/.venv/bin/python -m handwriting_ocr watch --config __CONFIG_PATH__
+Restart=on-failure
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+# For online OpenAI OCR, uncomment and set the key in a user-private override:
+# Environment=OPENAI_API_KEY=sk-...
+
+[Install]
+WantedBy=default.target

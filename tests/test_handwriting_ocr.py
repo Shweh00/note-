@@ -27,6 +27,9 @@ from handwriting_obsidian.processor import (
 from handwriting_obsidian.state import ProcessingState
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
 class FailingOcr:
     name = "failing"
 
@@ -1150,3 +1153,32 @@ def test_cli_error_paths(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> 
     bad_config = write_config(tmp_path / "bad-cli")
     bad_config.write_text(bad_config.read_text(encoding="utf-8").replace('provider: "mock"', 'provider: "bad"'), encoding="utf-8")
     assert main(["batch", "--config", str(bad_config)]) == 1
+
+
+def test_daemon_runbook_and_templates_cover_supported_platforms() -> None:
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    runbook_path = PROJECT_ROOT / "docs" / "daemon-runbook.md"
+    runbook = runbook_path.read_text(encoding="utf-8")
+
+    assert "docs/daemon-runbook.md" in readme
+    for required in (
+        "systemd --user",
+        "launchd",
+        "Task Scheduler",
+        "handwriting-ocr watch",
+        "handwriting-ocr doctor",
+        "journalctl --user",
+        "retry-failed",
+    ):
+        assert required in runbook
+
+    templates = {
+        "scripts/templates/systemd/handwriting-ocr.service": ("ExecStart=", "__CONFIG_PATH__", "Restart=on-failure"),
+        "scripts/templates/launchd/com.example.handwriting-ocr.plist": ("ProgramArguments", "__CONFIG_PATH__", "KeepAlive"),
+        "scripts/templates/windows/handwriting-ocr-watch.ps1": ("handwriting_ocr watch", "__CONFIG_PATH__", "watch.err.log"),
+        "scripts/templates/windows/handwriting-ocr-watch-task.xml": ("LogonTrigger", "__SCRIPT_PATH__", "powershell.exe"),
+    }
+    for relative_path, expected_parts in templates.items():
+        content = (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
+        for expected in expected_parts:
+            assert expected in content
