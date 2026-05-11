@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
+import urllib.error
 
 import pytest
 
@@ -115,9 +117,13 @@ def test_duplicate_content_in_new_file_is_recorded_without_new_note(tmp_path: Pa
     duplicate = tmp_path / "incoming" / "duplicate.jpg"
     duplicate.write_bytes(b"same bytes")
     results = process_batch(config, create_ocr_engine(config.ocr))
+    repeat = process_batch(config, create_ocr_engine(config.ocr))
 
     assert [result.status for result in results] == ["duplicate"]
+    assert repeat == []
     assert len(list(config.output_dir.glob("*.md"))) == 1
+    assert not duplicate.exists()
+    assert (config.processed_dir / "duplicate.jpg").exists()
     with ProcessingState.open(config.state_path) as state:
         counts = state.counts()
     assert counts["success"] == 1
@@ -198,6 +204,14 @@ def test_config_validation_and_helpers(tmp_path: Path, monkeypatch: pytest.Monke
     with pytest.raises(ValueError):
         load_config(bad_config)
 
+    bad_dedupe = write_config(tmp_path / "bad-dedupe")
+    bad_dedupe.write_text(
+        bad_dedupe.read_text(encoding="utf-8").replace('on_duplicate: "skip"', 'on_duplicate: "archive"'),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError):
+        load_config(bad_dedupe)
+
 
 def test_config_toml_fallback_simple_yaml_and_validation(tmp_path: Path) -> None:
     toml = tmp_path / "config.toml"
@@ -255,11 +269,44 @@ bad line
 def test_ocr_provider_edges(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     image = tmp_path / "image.png"
     image.write_bytes(b"image")
-    online = create_ocr_engine(OcrConfig(mode="online", provider="openai", api_key_env="NO_KEY"))
+    online = create_ocr_engine(OcrConfig(mode="online", provider="openai", api_key_env="NO_KEY", retry_count=0))
     with pytest.raises(RuntimeError, match="NO_KEY"):
         online.recognize(image, language="eng")
+
     monkeypatch.setenv("NO_KEY", "x")
-    with pytest.raises(RuntimeError, match="reserved"):
+
+    class FakeResponse:
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps({"output_text": "line one\nuncertain[?]"}).encode("utf-8")
+
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(request: object, timeout: int) -> FakeResponse:
+        captured["timeout"] = timeout
+        captured["body"] = json.loads(request.data.decode("utf-8"))  # type: ignore[attr-defined]
+        return FakeResponse()
+
+    monkeypatch.setattr("handwriting_obsidian.ocr.urllib.request.urlopen", fake_urlopen)
+    result = online.recognize(image, language="eng")
+    assert result.text == "line one\nuncertain[?]"
+    assert result.uncertain_items == ("uncertain[?]",)
+    assert result.provider == "openai"
+    assert captured["timeout"] == 120
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body["input"][0]["content"][1]["image_url"].startswith("data:image/png;base64,")
+
+    def fake_http_error(*_args: object, **_kwargs: object) -> object:
+        raise urllib.error.HTTPError("url", 400, "bad", {}, None)
+
+    monkeypatch.setattr("handwriting_obsidian.ocr.urllib.request.urlopen", fake_http_error)
+    with pytest.raises(RuntimeError, match="HTTP 400"):
         online.recognize(image, language="eng")
 
     class Completed:
@@ -302,6 +349,41 @@ def test_processor_edges_and_archive_modes(tmp_path: Path) -> None:
     existing_note.write_text("exists", encoding="utf-8")
     note = build_note_path(config.output_dir, "same", __import__("datetime").datetime(2026, 1, 1, 12, 0), "abcdef123")
     assert note.name.endswith("-abcdef12.md")
+
+
+def test_wait_until_stable_requires_consecutive_stable_observations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    image = tmp_path / "incoming" / "slow.png"
+    image.parent.mkdir()
+    image.write_bytes(b"a")
+    sleeps = {"count": 0}
+
+    def fake_sleep(_seconds: float) -> None:
+        sleeps["count"] += 1
+        if sleeps["count"] == 1:
+            image.write_bytes(b"ab")
+
+    monkeypatch.setattr("handwriting_obsidian.processor.time.sleep", fake_sleep)
+    wait_until_stable(image, 0.01, timeout_seconds=1, stable_checks=2)
+    assert sleeps["count"] >= 3
+
+
+def test_wait_until_stable_times_out_when_file_keeps_changing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    image = tmp_path / "incoming" / "never-stable.png"
+    image.parent.mkdir()
+    image.write_bytes(b"a")
+    ticks = {"now": 0.0}
+
+    def fake_monotonic() -> float:
+        ticks["now"] += 0.02
+        return ticks["now"]
+
+    def fake_sleep(_seconds: float) -> None:
+        image.write_bytes(image.read_bytes() + b"x")
+
+    monkeypatch.setattr("handwriting_obsidian.processor.time.monotonic", fake_monotonic)
+    monkeypatch.setattr("handwriting_obsidian.processor.time.sleep", fake_sleep)
+    with pytest.raises(TimeoutError):
+        wait_until_stable(image, 0.01, timeout_seconds=0.05, stable_checks=2)
 
 
 def test_cli_error_paths(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

@@ -1,6 +1,6 @@
 # Handwriting OCR Obsidian
 
-本地 CLI 工具：把输入文件夹里的手写图片识别成文字，并生成 Obsidian 可直接阅读的 Markdown。默认 `mock` OCR 不需要网络、API key 或外部付费凭据，适合先跑通批处理、监听、去重和 Markdown 模板。
+本地 CLI 工具：把输入文件夹里的手写图片识别成文字，并生成 Obsidian 可直接阅读的 Markdown。默认 `mock` OCR 不需要网络、API key 或外部付费凭据，适合先跑通批处理、监听、去重和 Markdown 模板；需要真实在线识别时可配置 OpenAI 图片 OCR。
 
 ## 安装
 
@@ -62,7 +62,7 @@ handwriting-ocr retry-failed --config ~/ObsidianVault/.handwriting-ocr/config.ya
 handwriting-ocr doctor --config ~/ObsidianVault/.handwriting-ocr/config.yaml
 ```
 
-`batch` 处理现有图片；`watch` 持续轮询新增图片，按 `Ctrl+C` 停止；`status` 显示 SQLite 中的成功、失败、重复和最近失败；`retry-failed` 重新处理失败记录；`doctor` 检查目录、SQLite 和 OCR 凭据。
+`batch` 处理现有图片；`watch` 持续轮询新增图片，并在文件大小和 mtime 连续稳定后才处理，按 `Ctrl+C` 停止；`status` 显示 SQLite 中的成功、失败、重复和最近失败；`retry-failed` 重新处理失败记录；`doctor` 检查目录、SQLite 和 OCR 凭据。
 
 ## Obsidian 输出
 
@@ -87,7 +87,24 @@ tags:
 
 ## 在线 OCR 与隐私
 
-在线 OCR 需要配置 API key，并会把图片发送到外部服务。敏感内容请使用 `mock` 或未来离线 provider。MVP 中 `openai` provider 会在缺少 `OPENAI_API_KEY` 时由 `doctor` 明确报错；基础流程不依赖它。
+在线 OCR 需要配置 API key，并会把图片发送到 OpenAI Responses API。敏感内容请使用 `mock` 或本机 `tesseract` provider。基础流程不依赖在线 OCR；使用前建议先运行 `doctor`。
+
+```yaml
+ocr:
+  mode: "online"
+  provider: "openai"
+  model: "gpt-4.1-mini"
+  language: "zh-cn,en"
+  api_key_env: "OPENAI_API_KEY"
+  timeout_seconds: 120
+  retry_count: 3
+```
+
+```bash
+export OPENAI_API_KEY="sk-..."
+handwriting-ocr doctor --config ~/ObsidianVault/.handwriting-ocr/config.yaml
+handwriting-ocr batch --config ~/ObsidianVault/.handwriting-ocr/config.yaml
+```
 
 ## HEIC 限制
 
@@ -96,7 +113,7 @@ tags:
 ## 常见问题
 
 - 目录不可写：运行 `handwriting-ocr doctor --config ...`，它会检查输出、归档、错误目录。
-- 重复图片没有生成新笔记：工具按内容 SHA-256 去重，已成功处理的相同内容会记录为 `duplicate`。
+- 重复图片没有生成新笔记：工具按内容 SHA-256 去重，已成功处理的相同内容会记录为 `duplicate`，默认移动到 `processed/`，避免 `batch` 或 `watch` 反复计数。需要保留在输入目录时可把 `dedupe.on_duplicate` 改为 `keep`。
 - OCR 失败：查看 `status` 最近失败，然后修复配置或凭据，运行 `retry-failed`。
 - Obsidian 看不到图片：确认输出目录和 processed 目录都在同一个 vault 中，Markdown 使用相对 Obsidian embed 链接。
 

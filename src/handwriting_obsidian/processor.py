@@ -42,14 +42,25 @@ def fingerprint(path: Path) -> str:
     return digest.hexdigest()
 
 
-def wait_until_stable(path: Path, seconds: float) -> None:
+def wait_until_stable(path: Path, seconds: float, *, timeout_seconds: float | None = None, stable_checks: int = 2) -> None:
     if seconds <= 0:
         return
-    first = path.stat()
-    time.sleep(min(seconds, 2))
-    second = path.stat()
-    if first.st_size != second.st_size or first.st_mtime != second.st_mtime:
-        time.sleep(min(seconds, 2))  # pragma: no cover - race protection for live file writes
+    interval = min(seconds, 2)
+    timeout = timeout_seconds if timeout_seconds is not None else max(seconds * 5, seconds + 5)
+    deadline = time.monotonic() + timeout
+    previous = path.stat()
+    stable_count = 0
+    while time.monotonic() < deadline:
+        time.sleep(interval)
+        current = path.stat()
+        if current.st_size == previous.st_size and current.st_mtime_ns == previous.st_mtime_ns:
+            stable_count += 1
+            if stable_count >= stable_checks:
+                return
+        else:
+            stable_count = 0
+            previous = current
+    raise TimeoutError(f"{path} did not become stable within {timeout:g} seconds")
 
 
 def relative_markdown_path(from_dir: Path, target: Path) -> str:
@@ -92,7 +103,15 @@ def process_image(
         image_hash = fingerprint(image_path)
         existing = state.successful_by_hash(image_hash)
         if existing:
-            state.duplicate(source_path=image_path, source_hash=image_hash, file_size=stat.st_size, mtime=stat.st_mtime, existing=existing)
+            archived_path = _archive_duplicate(image_path, config)
+            state.duplicate(
+                source_path=image_path,
+                source_hash=image_hash,
+                file_size=stat.st_size,
+                mtime=stat.st_mtime,
+                existing=existing,
+                archived_path=archived_path,
+            )
             return ProcessResult(image_path=image_path, note_path=Path(existing.output_path) if existing.output_path else None, status="duplicate", reason="duplicate")
 
         record_id = state.insert_pending(
@@ -192,6 +211,12 @@ def _unique_path(path: Path) -> Path:
         if not candidate.exists():
             return candidate
     raise RuntimeError(f"could not find unique path for {path}")  # pragma: no cover
+
+
+def _archive_duplicate(image_path: Path, config: AppConfig) -> Path:
+    if config.dedupe.on_duplicate == "keep":
+        return image_path
+    return archive_image(image_path, config, config.archive.after_success, config.processed_dir)
 
 
 def _retry_source_path(record: StateRecord) -> Path:

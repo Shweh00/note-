@@ -186,12 +186,14 @@ def load_config(path: Path) -> AppConfig:
     after_success = str(archive_raw.get("after_success", "move"))
     after_error = str(archive_raw.get("after_error", "move"))
     dedupe_strategy = str(dedupe_raw.get("strategy", "content_hash"))
+    dedupe_on_duplicate = str(dedupe_raw.get("on_duplicate", "skip"))
 
     _validate_choice("ocr.mode", ocr_mode, {"online", "offline", "mock"})
     _validate_choice("ocr.provider", ocr_provider, {"openai", "paddle", "mock", "tesseract"})
     _validate_choice("archive.after_success", after_success, {"move", "keep", "copy"})
     _validate_choice("archive.after_error", after_error, {"move", "keep", "copy"})
     _validate_choice("dedupe.strategy", dedupe_strategy, {"content_hash", "path_and_mtime"})
+    _validate_choice("dedupe.on_duplicate", dedupe_on_duplicate, {"skip", "keep"})
 
     settle_seconds = float(watch_raw.get("settle_seconds", 5))
     if not 1 <= settle_seconds <= 300:
@@ -229,7 +231,7 @@ def load_config(path: Path) -> AppConfig:
             sqlite_path=sqlite_path,
             log_path=_resolve(base, log_value) if log_value else None,
         ),
-        dedupe=DedupeConfig(strategy=dedupe_strategy, on_duplicate=str(dedupe_raw.get("on_duplicate", "skip"))),
+        dedupe=DedupeConfig(strategy=dedupe_strategy, on_duplicate=dedupe_on_duplicate),
         archive=ArchiveConfig(after_success=after_success, after_error=after_error),
     )
 
@@ -250,5 +252,5 @@ def _legacy_toml_to_nested(raw: dict[str, Any]) -> dict[str, Any]:
         "markdown": {"default_tags": raw.get("tags", ("handwriting", "ocr", "to-review"))},
         "state": {"sqlite_path": raw.get("state_path", ".handwriting-ocr-state.sqlite")},
         "archive": {"after_success": "copy", "after_error": "copy"},
-        "dedupe": {"strategy": "content_hash", "on_duplicate": "skip"},
+        "dedupe": raw.get("dedupe", {"strategy": "content_hash", "on_duplicate": "skip"}),
     }

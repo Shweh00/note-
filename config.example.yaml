@@ -30,6 +30,8 @@ state:
 
 dedupe:
   strategy: "content_hash"
+  # skip records a duplicate and archives it with archive.after_success.
+  # keep records a duplicate but leaves the file in input_dir.
   on_duplicate: "skip"
 
 archive:

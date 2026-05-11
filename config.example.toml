@@ -6,20 +6,25 @@ input_dir = "incoming"
 # Folder inside your Obsidian vault where Markdown notes should be written.
 output_dir = "vault/Handwriting Notes"
 
-# Images are copied here so the generated notes can embed them reliably.
-assets_dir = "vault/Handwriting Notes/assets"
+# Images are copied here by the legacy TOML compatibility loader.
+processed_dir = "incoming/processed"
+error_dir = "incoming/error"
 
 # SQLite state file used for de-duplication.
 state_path = ".handwriting-ocr/state.sqlite"
 
-# Supported image extensions.
-extensions = [".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp"]
+# Supported image extensions: .jpg, .jpeg, .png, .webp, .heic.
 
 # Tags added to every generated note.
 tags = ["handwriting", "ocr"]
 
 # Poll interval for the watch command, in seconds.
 watch_interval_seconds = 5
+
+[dedupe]
+strategy = "content_hash"
+# skip records a duplicate and archives it; keep leaves the duplicate in input_dir.
+on_duplicate = "skip"
 
 [ocr]
 # "mock" works without external services. It uses a same-name .txt sidecar file

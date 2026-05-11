@@ -116,11 +116,25 @@ class ProcessingState:
         )
         self.connection.commit()
 
-    def duplicate(self, *, source_path: Path, source_hash: str, file_size: int, mtime: float, existing: StateRecord) -> int:
+    def duplicate(
+        self,
+        *,
+        source_path: Path,
+        source_hash: str,
+        file_size: int,
+        mtime: float,
+        existing: StateRecord,
+        archived_path: Path | None = None,
+    ) -> int:
         record_id = self.insert_pending(
             source_path=source_path, source_hash=source_hash, file_size=file_size, mtime=mtime
         )
-        self.update(record_id, "duplicate", output_path=existing.output_path, archived_path=existing.archived_path)
+        self.update(
+            record_id,
+            "duplicate",
+            output_path=existing.output_path,
+            archived_path=str(archived_path) if archived_path else existing.archived_path,
+        )
         return record_id
 
     def counts(self) -> dict[str, int]:
