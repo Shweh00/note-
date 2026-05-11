@@ -34,7 +34,7 @@ $HW_SAMPLE_VAULT/.handwriting-ocr/real-samples/sample-manifest.yaml
 $HW_SAMPLE_VAULT/.handwriting-ocr/real-samples/expected/<sample_id>.expected.md
 ```
 
-复验前把配置里的 `watch.input_dir` 临时改为 `Inbox/HandwritingImages/real-samples`，或把 18 张图片复制到默认 `Inbox/HandwritingImages/`。为了避免 mock sidecar 影响真实 OCR，真实样例目录内不要放同名 `.txt`。
+复验前把配置里的 `watch.input_dir` 临时改为绝对路径 `$HW_SAMPLE_VAULT/Inbox/HandwritingImages/real-samples`。如果手动编辑 YAML 时不展开环境变量，也可以写成相对配置文件目录的 `../Inbox/HandwritingImages/real-samples`，因为配置文件位于 `$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml`。如需隔离归档，也把 `watch.processed_dir` 和 `watch.error_dir` 指向真实样例目录下的 `_processed`、`_errors`；否则可把 18 张图片复制到默认 `Inbox/HandwritingImages/`。为了避免 mock sidecar 影响真实 OCR，真实样例目录内不要放同名 `.txt`。
 
 ## 隐私脱敏
 
@@ -59,8 +59,8 @@ YYYY-MM-DD_NNN_<lang>_<scenario>_<quality>.<ext>
 - `YYYY-MM-DD`：样例创建日期，也可用于 `date_source: source_name` 复验。
 - `NNN`：三位序号，从 `001` 到 `018`。
 - `lang`：`zh`、`en`、`mixed` 或 `num`。
-- `scenario`：场景短名，如 `meeting`、`todo`、`math`、`receipt`。
-- `quality`：`clear`、`shadow`、`tilted`、`faint`、`crowded` 等。
+- `scenario`：单段场景短名，如 `meeting`、`todo`、`math`、`receipt`；不要包含额外下划线。
+- `quality`：单段质量短名，如 `clear`、`shadow`、`tilted`、`faint`、`crowded`；不要包含额外下划线。
 - `ext`：优先 `jpg`、`jpeg` 或 `png`；HEIC 需先转换。
 
 示例：
@@ -83,21 +83,21 @@ YYYY-MM-DD_NNN_<lang>_<scenario>_<quality>.<ext>
 | 001 | `zh_meeting_clear` | 清晰中文横线纸 | 会议纪要、2-3 个项目符号 |
 | 002 | `zh_todo_faint` | 浅色笔迹 | 待办清单、日期、优先级 |
 | 003 | `zh_diary_tilted` | 轻微倾斜拍摄 | 3-5 行日记式短句 |
-| 004 | `zh_vertical_note` | 中文竖向或分栏 | 竖排词组、短标题 |
+| 004 | `zh_vertical_layout` | 中文竖向或分栏 | 竖排词组、短标题 |
 | 005 | `en_notes_clear` | 英文手写 | 英文课堂笔记或短段落 |
 | 006 | `mixed_bilingual_clear` | 中英混写 | 中文句子夹英文术语 |
 | 007 | `num_math_grid` | 数字和符号 | 简单公式、编号、百分比 |
-| 008 | `table_schedule` | 手绘表格 | 2-3 列日程表 |
-| 009 | `receipt_amounts` | 金额、日期 | 虚构消费记录和合计 |
-| 010 | `contact_fake` | 脱敏联系人格式 | 假姓名、假电话、假邮箱 |
-| 011 | `mindmap_arrows` | 箭头和层级 | 简单脑图或流程 |
+| 008 | `zh_schedule_table` | 手绘表格 | 2-3 列日程表 |
+| 009 | `num_receipt_amounts` | 金额、日期 | 虚构消费记录和合计 |
+| 010 | `mixed_contact_redacted` | 脱敏联系人格式 | 假姓名、假电话、假邮箱 |
+| 011 | `zh_mindmap_arrows` | 箭头和层级 | 简单脑图或流程 |
 | 012 | `recipe_shadow` | 阴影和多行 | 配方、数量、步骤 |
-| 013 | `sticky_note_small` | 小纸张低分辨率 | 便签短句 |
-| 014 | `crowded_page` | 密集排版 | 多行压缩笔记 |
-| 015 | `crossed_out` | 划掉和修改 | 被划掉文本、改写文本 |
-| 016 | `blue_ink_low_contrast` | 蓝色或低对比 | 蓝笔内容、浅背景 |
-| 017 | `photo_angle` | 手机斜拍边角 | 纸张边缘可见、透视变形 |
-| 018 | `multi_page_marker` | 多页编号语义 | 写明 `Page 1/2` 或连续页标记 |
+| 013 | `zh_sticky_small` | 小纸张低分辨率 | 便签短句 |
+| 014 | `zh_notes_crowded` | 密集排版 | 多行压缩笔记 |
+| 015 | `zh_revision_crossed` | 划掉和修改 | 被划掉文本、改写文本 |
+| 016 | `zh_contrast_faint` | 蓝色或低对比 | 蓝笔内容、浅背景 |
+| 017 | `zh_photo_tilted` | 手机斜拍边角 | 纸张边缘可见、透视变形 |
+| 018 | `mixed_pages_marker` | 多页编号语义 | 写明 `Page 1/2` 或连续页标记 |
 
 每个样例至少 20 个可识别字符；极短便签样例可以少一些，但必须在 `sample-manifest.yaml` 里标记 `expected_character_count`。
 
@@ -122,6 +122,7 @@ YYYY-MM-DD_NNN_<lang>_<scenario>_<quality>.<ext>
 - `samples[].image_sha256`：用 `sha256sum` 或 `shasum -a 256` 生成。
 - `samples[].expected_file`：相对 manifest 所在目录的路径，例如 `expected/<sample_id>.expected.md`。
 - `samples[].review_priority`：`p0` 表示阻塞质量判断，`p1` 表示重要覆盖，`p2` 表示补充覆盖。
+- `samples[].privacy_checked`：完成内容重写、背景检查、EXIF/GPS 清除和 expected 文本脱敏后必须改为 `true`。api-tester 复验时发现任何样例缺失该字段或值仍为 `false`，应判为采集包不完整。
 
 生成 hash 示例：
 

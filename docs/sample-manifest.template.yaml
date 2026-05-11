@@ -12,6 +12,8 @@ dataset:
 validation:
   minimum_sample_count: 18
   allowed_extensions: ["jpg", "jpeg", "png"]
+  required_filename_pattern: "^\\d{4}-\\d{2}-\\d{2}_[0-9]{3}_(zh|en|mixed|num)_[a-z0-9-]+_[a-z0-9-]+\\.(jpg|jpeg|png)$"
+  required_privacy_checked: true
   required_commands:
     - "handwriting-ocr doctor --config \"$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml\""
     - "handwriting-ocr batch --config \"$HW_SAMPLE_VAULT/.handwriting-ocr/config.yaml\""
@@ -55,10 +57,10 @@ samples:
     review_priority: "p1"
     privacy_checked: false
 
-  - sample_id: "2026-05-11_004_zh_vertical_note"
-    image_file: "2026-05-11_004_zh_vertical_note.jpg"
+  - sample_id: "2026-05-11_004_zh_vertical_layout"
+    image_file: "2026-05-11_004_zh_vertical_layout.jpg"
     image_sha256: "TODO"
-    expected_file: "expected/2026-05-11_004_zh_vertical_note.expected.md"
+    expected_file: "expected/2026-05-11_004_zh_vertical_layout.expected.md"
     language: "zh-cn"
     scenario: "vertical-note"
     quality_tags: ["vertical", "layout"]
@@ -103,10 +105,10 @@ samples:
     review_priority: "p0"
     privacy_checked: false
 
-  - sample_id: "2026-05-11_008_table_schedule"
-    image_file: "2026-05-11_008_table_schedule.jpg"
+  - sample_id: "2026-05-11_008_zh_schedule_table"
+    image_file: "2026-05-11_008_zh_schedule_table.jpg"
     image_sha256: "TODO"
-    expected_file: "expected/2026-05-11_008_table_schedule.expected.md"
+    expected_file: "expected/2026-05-11_008_zh_schedule_table.expected.md"
     language: "zh-cn"
     scenario: "schedule-table"
     quality_tags: ["table", "grid"]
@@ -115,11 +117,11 @@ samples:
     review_priority: "p0"
     privacy_checked: false
 
-  - sample_id: "2026-05-11_009_receipt_amounts"
-    image_file: "2026-05-11_009_receipt_amounts.jpg"
+  - sample_id: "2026-05-11_009_num_receipt_amounts"
+    image_file: "2026-05-11_009_num_receipt_amounts.jpg"
     image_sha256: "TODO"
-    expected_file: "expected/2026-05-11_009_receipt_amounts.expected.md"
-    language: "zh-cn"
+    expected_file: "expected/2026-05-11_009_num_receipt_amounts.expected.md"
+    language: "numbers"
     scenario: "receipt"
     quality_tags: ["amounts", "dates"]
     expected_character_count: 60
@@ -127,10 +129,10 @@ samples:
     review_priority: "p0"
     privacy_checked: false
 
-  - sample_id: "2026-05-11_010_contact_fake"
-    image_file: "2026-05-11_010_contact_fake.jpg"
+  - sample_id: "2026-05-11_010_mixed_contact_redacted"
+    image_file: "2026-05-11_010_mixed_contact_redacted.jpg"
     image_sha256: "TODO"
-    expected_file: "expected/2026-05-11_010_contact_fake.expected.md"
+    expected_file: "expected/2026-05-11_010_mixed_contact_redacted.expected.md"
     language: "zh-cn,en"
     scenario: "fake-contact"
     quality_tags: ["redacted", "contact-format"]
@@ -139,10 +141,10 @@ samples:
     review_priority: "p1"
     privacy_checked: false
 
-  - sample_id: "2026-05-11_011_mindmap_arrows"
-    image_file: "2026-05-11_011_mindmap_arrows.jpg"
+  - sample_id: "2026-05-11_011_zh_mindmap_arrows"
+    image_file: "2026-05-11_011_zh_mindmap_arrows.jpg"
     image_sha256: "TODO"
-    expected_file: "expected/2026-05-11_011_mindmap_arrows.expected.md"
+    expected_file: "expected/2026-05-11_011_zh_mindmap_arrows.expected.md"
     language: "zh-cn"
     scenario: "mindmap"
     quality_tags: ["arrows", "hierarchy"]
@@ -163,10 +165,10 @@ samples:
     review_priority: "p1"
     privacy_checked: false
 
-  - sample_id: "2026-05-11_013_sticky_note_small"
-    image_file: "2026-05-11_013_sticky_note_small.jpg"
+  - sample_id: "2026-05-11_013_zh_sticky_small"
+    image_file: "2026-05-11_013_zh_sticky_small.jpg"
     image_sha256: "TODO"
-    expected_file: "expected/2026-05-11_013_sticky_note_small.expected.md"
+    expected_file: "expected/2026-05-11_013_zh_sticky_small.expected.md"
     language: "zh-cn"
     scenario: "sticky-note"
     quality_tags: ["small-paper", "short-text"]
@@ -175,10 +177,10 @@ samples:
     review_priority: "p2"
     privacy_checked: false
 
-  - sample_id: "2026-05-11_014_crowded_page"
-    image_file: "2026-05-11_014_crowded_page.jpg"
+  - sample_id: "2026-05-11_014_zh_notes_crowded"
+    image_file: "2026-05-11_014_zh_notes_crowded.jpg"
     image_sha256: "TODO"
-    expected_file: "expected/2026-05-11_014_crowded_page.expected.md"
+    expected_file: "expected/2026-05-11_014_zh_notes_crowded.expected.md"
     language: "zh-cn"
     scenario: "crowded-notes"
     quality_tags: ["crowded", "dense"]
@@ -187,10 +189,10 @@ samples:
     review_priority: "p1"
     privacy_checked: false
 
-  - sample_id: "2026-05-11_015_crossed_out"
-    image_file: "2026-05-11_015_crossed_out.jpg"
+  - sample_id: "2026-05-11_015_zh_revision_crossed"
+    image_file: "2026-05-11_015_zh_revision_crossed.jpg"
     image_sha256: "TODO"
-    expected_file: "expected/2026-05-11_015_crossed_out.expected.md"
+    expected_file: "expected/2026-05-11_015_zh_revision_crossed.expected.md"
     language: "zh-cn"
     scenario: "revision"
     quality_tags: ["crossed-out", "correction"]
@@ -199,10 +201,10 @@ samples:
     review_priority: "p1"
     privacy_checked: false
 
-  - sample_id: "2026-05-11_016_blue_ink_low_contrast"
-    image_file: "2026-05-11_016_blue_ink_low_contrast.jpg"
+  - sample_id: "2026-05-11_016_zh_contrast_faint"
+    image_file: "2026-05-11_016_zh_contrast_faint.jpg"
     image_sha256: "TODO"
-    expected_file: "expected/2026-05-11_016_blue_ink_low_contrast.expected.md"
+    expected_file: "expected/2026-05-11_016_zh_contrast_faint.expected.md"
     language: "zh-cn"
     scenario: "low-contrast"
     quality_tags: ["blue-ink", "low-contrast"]
@@ -211,10 +213,10 @@ samples:
     review_priority: "p1"
     privacy_checked: false
 
-  - sample_id: "2026-05-11_017_photo_angle"
-    image_file: "2026-05-11_017_photo_angle.jpg"
+  - sample_id: "2026-05-11_017_zh_photo_tilted"
+    image_file: "2026-05-11_017_zh_photo_tilted.jpg"
     image_sha256: "TODO"
-    expected_file: "expected/2026-05-11_017_photo_angle.expected.md"
+    expected_file: "expected/2026-05-11_017_zh_photo_tilted.expected.md"
     language: "zh-cn"
     scenario: "angled-photo"
     quality_tags: ["perspective", "paper-edge"]
@@ -223,10 +225,10 @@ samples:
     review_priority: "p2"
     privacy_checked: false
 
-  - sample_id: "2026-05-11_018_multi_page_marker"
-    image_file: "2026-05-11_018_multi_page_marker.jpg"
+  - sample_id: "2026-05-11_018_mixed_pages_marker"
+    image_file: "2026-05-11_018_mixed_pages_marker.jpg"
     image_sha256: "TODO"
-    expected_file: "expected/2026-05-11_018_multi_page_marker.expected.md"
+    expected_file: "expected/2026-05-11_018_mixed_pages_marker.expected.md"
     language: "zh-cn,en"
     scenario: "page-marker"
     quality_tags: ["page-number", "continuation"]

@@ -39,4 +39,6 @@ privacy_checked: false
 
 ## notes_for_reviewer
 
+Set `privacy_checked: true` only after the image content has been rewritten or redacted, background privacy has been checked, EXIF/GPS metadata has been removed, and this expected text contains no sensitive personal or private project data. api-tester should reject samples where this field is missing or still `false`.
+
 Use this file as the human reference when comparing generated Markdown. Mark a sample as failed when required numbers, dates, names, or checklist items are missing or materially wrong.
